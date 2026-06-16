@@ -126,6 +126,11 @@ final class AppCoordinator: ObservableObject {
     private var recordingStartedAt: Date?
     private var streamingTask: Task<Void, Never>?
     private var streamingSession: (any StreamingSession)?
+    // The audio-feed loop, pumping recorder.chunks into the streaming session.
+    // Owned here (not nested in streamingTask) so finishStreamingRecording()
+    // can await it - draining every buffered chunk into the session - before
+    // calling finish(). See beginStreamingRecording / finishStreamingRecording.
+    private var feedTask: Task<Void, Never>?
     // Streaming sessions need an `await` to load - meanwhile the user might
     // already release the hotkey. We track that intent here so the in-flight
     // setup task can bail out instead of starting a recording nobody wants.
@@ -708,6 +713,19 @@ final class AppCoordinator: ObservableObject {
                 // Two concurrent tasks: feed chunks into the session, and
                 // drain its events (preview + per-sentence commit). Both die
                 // when the session is finished or cancelled.
+                //
+                // The feed task is owned by the coordinator (not nested inside
+                // the event task) so finishStreamingRecording() can await it -
+                // draining every buffered chunk into the session - before
+                // calling finish(). finish() only transcribes audio already
+                // fed, so a chunk still in flight when it runs would be lost:
+                // that's the trailing words that vanish on a quick key release.
+                feedTask = Task { [recorder, weak self] in
+                    for await chunk in recorder.chunks {
+                        guard self != nil else { break }
+                        try? await session.feed(samples: chunk)
+                    }
+                }
                 streamingTask = Task { [weak self] in
                     await self?.runStreamingTask(session: session)
                 }
@@ -725,17 +743,6 @@ final class AppCoordinator: ObservableObject {
     }
 
     private func runStreamingTask(session: any StreamingSession) async {
-        // Audio-feed loop: every recorded PCM chunk goes straight into the
-        // ASR session. We don't await the feed - the session does the work
-        // on its own actor and we don't want to backpressure the audio
-        // thread.
-        let feedTask = Task { [recorder, weak self] in
-            for await chunk in recorder.chunks {
-                guard self != nil else { break }
-                try? await session.feed(samples: chunk)
-            }
-        }
-
         // Per-sentence commit. Partials only drive the HUD preview - nothing
         // touches the document until a pause (EOU), when we post-process that
         // one sentence and paste it once. Already-committed text is never
@@ -783,7 +790,6 @@ final class AppCoordinator: ObservableObject {
                 committed.append(piece)
             }
         }
-        feedTask.cancel()
         hud.updatePreview("")
 
         // Separate dictation sessions so the next press doesn't butt up
@@ -808,12 +814,24 @@ final class AppCoordinator: ObservableObject {
             return
         }
         do {
-            // finish() yields a final .endOfUtterance and closes the events
-            // stream; the runStreamingTask loop reconciles the trailing audio
-            // there. Awaiting the task (rather than cancelling it) guarantees
-            // that final reconcile - and the trailing space appended after the
-            // loop - have run before we tear down. The await is bounded:
-            // finish() already closed the stream, so the loop terminates.
+            // recorder.stop() closed recorder.chunks, so the feed loop now
+            // drains the last buffered mic chunks into the session and ends.
+            // Await it BEFORE finish(): the manager only transcribes audio that
+            // has already been fed, so finishing while chunks are still in
+            // flight drops the trailing words - the ones still showing as a
+            // live preview because no in-stream EOU (1.28 s of silence) had
+            // fired yet. Bounded: the stream is closed, so the loop ends once
+            // the buffered chunks are consumed.
+            await feedTask?.value
+            feedTask = nil
+
+            // finish() flushes the remaining padded chunk, yields a final
+            // .endOfUtterance, and closes the events stream; the
+            // runStreamingTask loop commits that trailing utterance there.
+            // Awaiting the task (rather than cancelling it) guarantees that
+            // commit - and the trailing space appended after the loop - have
+            // run before we tear down. The await is bounded: finish() already
+            // closed the stream, so the loop terminates.
             try await session.finish()
             await streamingTask?.value
             streamingSession = nil
@@ -822,10 +840,12 @@ final class AppCoordinator: ObservableObject {
             hud.hide()
         } catch {
             // finish() threw before closing the stream. Close it explicitly so
-            // the consumer loop terminates, then drain it (now bounded) instead
-            // of leaking the task.
+            // the consumer loop terminates, then drain both tasks (now bounded)
+            // instead of leaking them.
             await session.cancel()
             await streamingTask?.value
+            feedTask?.cancel()
+            feedTask = nil
             streamingSession = nil
             streamingTask = nil
             await reportError(error)

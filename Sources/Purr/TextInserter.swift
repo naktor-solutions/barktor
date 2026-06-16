@@ -31,8 +31,39 @@ final class TextInserter {
     private static let concealedType = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
     private static let transientType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
 
+    // Pending pastes, drained one at a time. Each paste owns the system
+    // pasteboard from the moment it writes until restoreDelay later (when the
+    // target app has consumed the ⌘V and we restore the user's clipboard).
+    // A second insert() that fired in the meantime must NOT overwrite the
+    // pasteboard yet - it would replace the text the first paste hasn't been
+    // consumed for, and that text is lost silently. That is exactly what
+    // dropped the trailing dictation word: the final committed sentence and
+    // the session's trailing space are inserted back-to-back, so the space
+    // clobbered the sentence before the app pasted it. Serialising the writes
+    // closes that window. All callers are @MainActor, so this state is only
+    // ever touched on the main thread - no lock needed.
+    private var pasteQueue: [String] = []
+    private var draining = false
+
     func insert(_ text: String) {
         guard !text.isEmpty else { return }
+        pasteQueue.append(text)
+        guard !draining else { return }
+        draining = true
+        drainNextPaste()
+    }
+
+    // Paste the head of the queue, then schedule the next one only after this
+    // paste's restore window elapses, so successive inserts never share the
+    // pasteboard. Mid-session sentences are seconds apart (EOU debounce), so
+    // this adds no latency there; only the final sentence + trailing space
+    // pair actually queues, and a ~restoreDelay gap at session end is invisible.
+    private func drainNextPaste() {
+        guard !pasteQueue.isEmpty else {
+            draining = false
+            return
+        }
+        let text = pasteQueue.removeFirst()
 
         let pasteboard = NSPasteboard.general
         let snapshot = snapshotPasteboard(pasteboard)
@@ -48,11 +79,12 @@ final class TextInserter {
 
         sendCommandV()
 
-        // Restore the previous contents on the main queue. We can't restore
-        // synchronously because the paste hasn't been consumed yet - see
-        // the comment on `restoreDelay` above.
-        DispatchQueue.main.asyncAfter(deadline: .now() + restoreDelay) {
-            self.restorePasteboard(pasteboard, snapshot: snapshot)
+        // Restore the previous contents on the main queue, then drain the next
+        // paste. We can't restore synchronously because the paste hasn't been
+        // consumed yet - see the comment on `restoreDelay` above.
+        DispatchQueue.main.asyncAfter(deadline: .now() + restoreDelay) { [self] in
+            restorePasteboard(pasteboard, snapshot: snapshot)
+            drainNextPaste()
         }
     }
 
