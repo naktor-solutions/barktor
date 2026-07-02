@@ -109,6 +109,18 @@ struct HistoryStoreTests {
         #expect(!FileManager.default.fileExists(atPath: store.audioDirectory.appendingPathComponent("a.wav").path))
     }
 
+    @Test func beginRetryGatesToOneAtATime() throws {
+        let (store, dir) = makeStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let a = UUID()
+        let b = UUID()
+        #expect(store.beginRetry(a) == true)
+        #expect(store.beginRetry(b) == false)
+        #expect(store.beginRetry(a) == false)
+        store.endRetry(a)
+        #expect(store.beginRetry(b) == true)
+    }
+
     @Test func persistAudioCleansUpWhenEntryVanishesMidWrite() async throws {
         let (store, dir) = makeStore()
         defer { try? FileManager.default.removeItem(at: dir) }

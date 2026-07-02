@@ -11,6 +11,22 @@ final class HistoryStore: ObservableObject {
 
     @Published private(set) var entries: [DictationEntry] = []
 
+    // Retry bookkeeping shared by every HistoryView instance (dedicated
+    // window + Settings tab): the one-retry-at-a-time gate must span all
+    // of them, and retryHistoryEntry itself uses it as a reentrancy guard.
+    @Published private(set) var retryingEntryIDs: Set<UUID> = []
+
+    // False when another retry is already in flight (or this id is).
+    func beginRetry(_ id: UUID) -> Bool {
+        guard retryingEntryIDs.isEmpty else { return false }
+        retryingEntryIDs.insert(id)
+        return true
+    }
+
+    func endRetry(_ id: UUID) {
+        retryingEntryIDs.remove(id)
+    }
+
     let directory: URL
     var audioDirectory: URL { directory.appendingPathComponent("audio", isDirectory: true) }
 
@@ -122,6 +138,9 @@ final class HistoryStore: ObservableObject {
                     }
                 }
             } catch {
+                // AVAudioFile(forWriting:) creates the file at init, so a failed
+                // write (e.g. disk full) leaves a partial WAV nothing points at.
+                try? FileManager.default.removeItem(at: dir.appendingPathComponent(filename))
                 await MainActor.run { [weak self] in
                     self?.log.warning(
                         "History audio write failed for \(id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public) - entry kept text-only"

@@ -1,5 +1,6 @@
 import Foundation
 
+// Persisted as JSON. Every field added later MUST be optional (or decoded with a default): a decode failure renames history.json to .bak and starts empty, which silently wipes the user's history on upgrade.
 struct DictationEntry: Codable, Identifiable, Equatable {
     enum Mode: String, Codable { case batch, streaming }
     enum Status: String, Codable { case ok, failed, interrupted, cancelled }

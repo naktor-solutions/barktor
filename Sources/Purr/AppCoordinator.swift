@@ -701,11 +701,6 @@ final class AppCoordinator: ObservableObject {
         do {
             let raw = try await engine.transcribe(samples: prepared.samples)
             let processed = makePostProcessor().apply(raw)
-            HistoryStore.shared.update(entryID) {
-                $0.rawText = raw
-                $0.processedText = processed.text
-                $0.status = .ok
-            }
             if processed.text.isEmpty {
                 state = .idle
                 if processed.dropPreviousChunks > 0 {
@@ -728,6 +723,14 @@ final class AppCoordinator: ObservableObject {
                 copyToClipboard(processed.text)
                 state = .idle
                 hud.flashCopied()
+            }
+            // The history save is synchronous on the main actor - do it after
+            // the text has landed, not before; a crash in between just leaves
+            // a retryable .interrupted entry.
+            HistoryStore.shared.update(entryID) {
+                $0.rawText = raw
+                $0.processedText = processed.text
+                $0.status = .ok
             }
         } catch {
             log.error("Transcription failed: \(error.localizedDescription, privacy: .public)")
@@ -1014,6 +1017,8 @@ final class AppCoordinator: ObservableObject {
         guard let entry = HistoryStore.shared.entries.first(where: { $0.id == id }),
             let url = HistoryStore.shared.audioURL(for: entry)
         else { return }
+        guard HistoryStore.shared.beginRetry(id) else { return }
+        defer { HistoryStore.shared.endRetry(id) }
         do {
             let samples = try WAVFile.read(url: url)
             let prepared = AudioPreprocessor.normalize(samples).samples

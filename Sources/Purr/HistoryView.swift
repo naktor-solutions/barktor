@@ -11,7 +11,6 @@ struct HistoryView: View {
     let coordinator: AppCoordinator
 
     @State private var showDeleteAllConfirmation = false
-    @State private var retryInFlight: Set<UUID> = []
 
     init(coordinator: AppCoordinator) {
         self.coordinator = coordinator
@@ -34,8 +33,8 @@ struct HistoryView: View {
                         let hasAudio = store.audioURL(for: entry) != nil
                         HistoryRow(
                             entry: entry,
-                            isRetrying: retryInFlight.contains(entry.id),
-                            canRetry: hasAudio && retryInFlight.isEmpty, // One retry at a time: each Whisper retry loads its own model instance.
+                            isRetrying: store.retryingEntryIDs.contains(entry.id),
+                            canRetry: hasAudio && store.retryingEntryIDs.isEmpty, // One retry at a time: each Whisper retry loads its own model instance.
                             canExport: hasAudio,
                             onCopy: { copy($0) },
                             onRetry: { engine in retry(entry, engine: engine) },
@@ -86,7 +85,7 @@ struct HistoryView: View {
             Button("Delete All History", role: .destructive) {
                 showDeleteAllConfirmation = true
             }
-            .disabled(store.entries.isEmpty || !retryInFlight.isEmpty) // A retry in flight targets an entry by id - don't yank the rug.
+            .disabled(store.entries.isEmpty || !store.retryingEntryIDs.isEmpty) // A retry in flight targets an entry by id - don't yank the rug.
             .confirmationDialog(
                 "Delete all history?", isPresented: $showDeleteAllConfirmation
             ) {
@@ -105,11 +104,7 @@ struct HistoryView: View {
     }
 
     private func retry(_ entry: DictationEntry, engine: SettingsStore.Engine) {
-        retryInFlight.insert(entry.id)
-        Task {
-            await coordinator.retryHistoryEntry(entry.id, using: engine)
-            retryInFlight.remove(entry.id)
-        }
+        Task { await coordinator.retryHistoryEntry(entry.id, using: engine) }
     }
 
     private func export(_ entry: DictationEntry) {
@@ -163,8 +158,11 @@ private struct HistoryRow: View {
                     .textSelection(.enabled)
             } else if let message = entry.errorMessage {
                 Text(message).foregroundStyle(.orange).font(.callout)
-            } else {
+            } else if canExport {
                 Text("No text - use Retry to transcribe the saved audio.")
+                    .foregroundStyle(.secondary).font(.callout)
+            } else {
+                Text("No text - the audio wasn't saved, so this entry can't be retried.")
                     .foregroundStyle(.secondary).font(.callout)
             }
         }
