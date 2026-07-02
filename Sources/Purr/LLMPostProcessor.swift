@@ -32,6 +32,13 @@ enum LLMPostProcessor {
     // 15 s watchdog: LlamaRuntime serializes generations, so a meeting
     // summary in flight can queue this call - past the deadline the dictation
     // ships deterministic rather than waiting.
+    //
+    // The deadline is soft: `work.cancel()` is cooperative, and
+    // LlamaSession.generate only observes cancellation between emitted tokens
+    // (never during prompt decode), so a worst-case overrun equals the
+    // remaining decode phase. Same characteristic as EditInterpreter's
+    // watchdog - acceptable for F3, documented so nobody mistakes it for a
+    // hard bound.
     private static let timeout: Duration = .seconds(15)
 
     static func polish(_ text: String) async -> String {
@@ -134,17 +141,22 @@ enum LLMPostProcessor {
 
     // MARK: - Output hygiene
 
-    // Models occasionally wrap output in code fences or stray whitespace
-    // despite instructions; strip the wrappers, never the content.
+    // Models occasionally wrap output in code fences despite instructions;
+    // strip the wrapper only when it is unambiguously a wrapper - a bare
+    // opening fence line (``` or ```lang) AND a bare closing fence - so a
+    // first line that carries real content is never truncated.
     static func sanitize(_ raw: String) -> String {
-        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if text.hasPrefix("```") {
-            var lines = text.split(separator: "\n", omittingEmptySubsequences: false)
-            if !lines.isEmpty { lines.removeFirst() }  // ``` or ```lang
-            if lines.last?.trimmingCharacters(in: .whitespaces) == "```" { lines.removeLast() }
-            text = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        return text
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        var lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        guard lines.count >= 2,
+            let first = lines.first?.trimmingCharacters(in: .whitespaces),
+            first.hasPrefix("```"),
+            first.dropFirst(3).allSatisfy({ $0.isLetter || $0.isNumber }),
+            lines.last?.trimmingCharacters(in: .whitespaces) == "```"
+        else { return text }
+        lines.removeFirst()
+        lines.removeLast()
+        return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // ~2x the input tokens at the ~4 chars/token rule of thumb, clamped so a

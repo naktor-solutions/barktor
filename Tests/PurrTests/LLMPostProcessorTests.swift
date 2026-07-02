@@ -31,6 +31,13 @@ struct LLMPostProcessorTests {
         #expect(LLMPostProcessor.sanitize("hola\nmundo") == "hola\nmundo")
     }
 
+    @Test func sanitizeNeverStripsContentBearingFenceLines() {
+        // Opening fence with no closing fence: not a wrapper, leave untouched.
+        #expect(LLMPostProcessor.sanitize("```hello\nworld") == "```hello\nworld")
+        // First line carries non-tag content: not a bare fence, leave untouched.
+        #expect(LLMPostProcessor.sanitize("```print(x)\n```") == "```print(x)\n```")
+    }
+
     @Test func maxTokensScalesWithInputAndClamps() {
         #expect(LLMPostProcessor.maxTokens(forInputLength: 10) == 256)
         #expect(LLMPostProcessor.maxTokens(forInputLength: 1000) == 500)
