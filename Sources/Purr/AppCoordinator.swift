@@ -837,6 +837,10 @@ final class AppCoordinator: ObservableObject {
                 preview += suffix
                 hud.updatePreview(preview)
             case .endOfUtterance(let utteranceRaw):
+                // rawParts is the unedited ASR stream - "scratch that" trims
+                // committed (what was typed) but never the raw record, matching
+                // batch where transcribe() output includes command phrases
+                // verbatim.
                 rawParts.append(utteranceRaw)
                 preview = ""
                 hud.updatePreview("")
@@ -852,7 +856,6 @@ final class AppCoordinator: ObservableObject {
                     let drop = min(result.dropPreviousChunks, committed.count)
                     let chars = committed.suffix(drop).reduce(0) { $0 + $1.count }
                     committed.removeLast(drop)
-                    rawParts.removeLast(min(drop, rawParts.count))
                     if chars > 0 { inserter.deleteBackward(chars) }
                 }
 
