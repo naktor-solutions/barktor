@@ -11,6 +11,7 @@ struct SettingsView: View {
     @State private var eouInstalled = ParakeetEngine.eouIsInstalled()
     // Shares the one Gemma model with the meeting summary section.
     @StateObject private var voiceEditLLM = LLMSummaryViewModel()
+    @StateObject private var launchAtLogin = LaunchAtLogin()
     @State private var showResetConfirmation = false
     @State private var showLanguagePicker = false
     @State private var showDeleteModelsConfirmation = false
@@ -127,6 +128,21 @@ struct SettingsView: View {
                 Toggle(
                     "Voice commands (\"new line\", \"comma\", \"scratch that\")",
                     isOn: $settings.voiceCommands)
+            }
+
+            Section("System") {
+                Toggle(
+                    "Open at login",
+                    isOn: Binding(
+                        get: { launchAtLogin.isEnabled },
+                        set: { launchAtLogin.set($0) }
+                    )
+                )
+                .onAppear { launchAtLogin.refresh() }
+                Toggle("Sound cues", isOn: $settings.soundCues)
+                Text("Subtle sounds when recording starts, stops, or is cancelled.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section {
