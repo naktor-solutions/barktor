@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import Testing
 
@@ -24,5 +25,40 @@ struct WAVFileTests {
     @Test func readRejectsMissingFile() {
         let url = tempURL()
         #expect(throws: (any Error).self) { try WAVFile.read(url: url) }
+    }
+
+    @Test func readRejectsNonFloat32WAV() throws {
+        let url = tempURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        // Build a 16 kHz mono Int16 WAV directly: same rate and channel
+        // count as Purr's format, but 16-bit integer on disk. The reader
+        // must reject it rather than silently converting to Float32.
+        // The writer is scoped so the file is closed (header finalized)
+        // before the read attempt.
+        do {
+            let file = try AVAudioFile(
+                forWriting: url,
+                settings: [
+                    AVFormatIDKey: kAudioFormatLinearPCM,
+                    AVSampleRateKey: 16_000,
+                    AVNumberOfChannelsKey: 1,
+                    AVLinearPCMBitDepthKey: 16,
+                    AVLinearPCMIsFloatKey: false,
+                ],
+                commonFormat: .pcmFormatInt16, interleaved: true)
+            let format = AVAudioFormat(
+                commonFormat: .pcmFormatInt16, sampleRate: 16_000,
+                channels: 1, interleaved: true)!
+            let frameCount: AVAudioFrameCount = 160
+            let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount)!
+            buffer.frameLength = frameCount
+            for i in 0..<Int(frameCount) {
+                buffer.int16ChannelData![0][i] = Int16(i * 100)
+            }
+            try file.write(from: buffer)
+        }
+        // Specifically WAVFileError: an incidental CoreAudio error (e.g. an
+        // unreadable file) must not satisfy this test.
+        #expect(throws: WAVFileError.self) { try WAVFile.read(url: url) }
     }
 }

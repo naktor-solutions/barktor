@@ -14,6 +14,7 @@ enum WAVFile {
     static let sampleRate: Double = 16_000
 
     static func write(samples: [Float], to url: URL) throws {
+        guard !samples.isEmpty else { throw WAVFileError.emptyFile }
         guard
             let format = AVAudioFormat(
                 commonFormat: .pcmFormatFloat32, sampleRate: sampleRate,
@@ -43,19 +44,26 @@ enum WAVFile {
 
     static func read(url: URL) throws -> [Float] {
         let file = try AVAudioFile(forReading: url)
-        let format = file.processingFormat
-        guard format.sampleRate == sampleRate, format.channelCount == 1 else {
+        // Validate the on-disk format (fileFormat): processingFormat is the
+        // canonicalized in-memory format and always reports Float32 for PCM,
+        // so it would silently accept e.g. a 16-bit integer WAV.
+        let disk = file.fileFormat
+        guard
+            disk.sampleRate == sampleRate, disk.channelCount == 1,
+            disk.commonFormat == .pcmFormatFloat32
+        else {
             throw WAVFileError.unsupportedFormat(
-                "expected 16kHz mono, got \(format.sampleRate)Hz \(format.channelCount)ch")
+                "expected 16kHz mono Float32, got \(disk.sampleRate)Hz "
+                    + "\(disk.channelCount)ch commonFormat=\(disk.commonFormat.rawValue)")
         }
         let frames = AVAudioFrameCount(file.length)
         guard frames > 0 else { throw WAVFileError.emptyFile }
         guard
-            let buffer = AVAudioPCMBuffer(
-                pcmFormat: AVAudioFormat(
-                    commonFormat: .pcmFormatFloat32, sampleRate: sampleRate,
-                    channels: 1, interleaved: false)!,
-                frameCapacity: frames)
+            let bufferFormat = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32, sampleRate: sampleRate,
+                channels: 1, interleaved: false)
+        else { throw WAVFileError.unsupportedFormat("could not build 16kHz mono format") }
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: bufferFormat, frameCapacity: frames)
         else { throw WAVFileError.unsupportedFormat("could not allocate buffer") }
         try file.read(into: buffer)
         return Array(
