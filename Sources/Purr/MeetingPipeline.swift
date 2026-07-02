@@ -33,7 +33,10 @@ final class MeetingPipeline: ObservableObject {
     // builds against the macOS 14.0 deployment target. nil when system audio
     // is unavailable or failed to start - the meeting is mic-only then.
     private var systemCapture: AnyObject?
-    private let parakeet: ParakeetEngine
+    // Resolved at stop() time so a Settings change between meetings takes
+    // effect without rebuilding the pipeline. The label feeds the transcript
+    // header ("_Engine: ..._").
+    private let engineProvider: () -> (engine: any TranscriptionEngine, label: String)
     private let diarizer = Diarizer()
     private let hud: RecordingHUD
     private let summarizer: MeetingSummarizer
@@ -51,10 +54,14 @@ final class MeetingPipeline: ObservableObject {
 
     private let log = Logger(subsystem: "com.arunbrahma.purr", category: "meeting")
 
-    init(parakeet: ParakeetEngine, hud: RecordingHUD, summarizer: MeetingSummarizer) {
-        self.parakeet = parakeet
+    init(
+        hud: RecordingHUD,
+        summarizer: MeetingSummarizer,
+        engineProvider: @escaping () -> (engine: any TranscriptionEngine, label: String)
+    ) {
         self.hud = hud
         self.summarizer = summarizer
+        self.engineProvider = engineProvider
     }
 
     func unloadDiarizer() {
@@ -187,6 +194,7 @@ final class MeetingPipeline: ObservableObject {
         }
         state = .processing
         hud.show(.transcribing)
+        let (engine, engineLabel) = engineProvider()
 
         do {
             let processingStarted = Date()
@@ -201,30 +209,31 @@ final class MeetingPipeline: ObservableObject {
                 // on the mic track - it can't reliably tell in-room speakers
                 // apart anyway, and skipping it means a short or quiet solo clip
                 // can never be rejected with "no speech detected".
-                let asr = try await parakeet.transcribeDetailed(samples: samples)
+                let asr = try await engine.transcribeDetailed(samples: samples)
                 logASRResult(asr, track: "mic")
                 log.info(
-                    "Meeting transcribe complete in \(String(format: "%.2f", Date().timeIntervalSince(processingStarted)), privacy: .public)s: \(asr.tokenTimings?.count ?? 0, privacy: .public) tokens, single local speaker (You)"
+                    "Meeting transcribe complete in \(String(format: "%.2f", Date().timeIntervalSince(processingStarted)), privacy: .public)s: \(asr.tokens.count, privacy: .public) tokens, single local speaker (You)"
                 )
                 document = MeetingDocument.format(
                     localOnly: asr,
                     duration: duration,
-                    recordedAt: Date()
+                    recordedAt: Date(),
+                    engineLabel: engineLabel
                 )
             } else {
                 // Two tracks: the system audio carries the remote participants
                 // (diarized into Speaker N); the echo-cancelled microphone
-                // carries the local user (labelled You). The two Parakeet
-                // passes share one AsrManager so they run sequentially;
-                // diarization runs concurrently with them.
+                // carries the local user (labelled You). The two ASR passes
+                // run sequentially on the same engine; diarization runs
+                // concurrently with them.
                 // Echo cancellation is pure CPU work; run it off the main
                 // actor so the HUD stays responsive during processing.
                 let cleanedMic = await Task.detached {
                     EchoCanceller.process(mic: samples, reference: systemSamples)
                 }.value
                 async let remoteSegmentsTask = diarizer.diarize(samples: systemSamples)
-                let remoteASR = try await parakeet.transcribeDetailed(samples: systemSamples)
-                let localASR = try await parakeet.transcribeDetailed(samples: cleanedMic)
+                let remoteASR = try await engine.transcribeDetailed(samples: systemSamples)
+                let localASR = try await engine.transcribeDetailed(samples: cleanedMic)
                 // As in the mic-only path, a diarization failure on the system
                 // track (no remote speech, music, near-silence) must not sink
                 // the meeting. Keep both transcripts; the remote side just
@@ -239,14 +248,15 @@ final class MeetingPipeline: ObservableObject {
                     remoteSegments = []
                 }
                 log.info(
-                    "Meeting dual-track complete in \(String(format: "%.2f", Date().timeIntervalSince(processingStarted)), privacy: .public)s: local \(localASR.tokenTimings?.count ?? 0, privacy: .public) tokens, remote \(remoteASR.tokenTimings?.count ?? 0, privacy: .public) tokens, \(remoteSegments.count, privacy: .public) speaker segments"
+                    "Meeting dual-track complete in \(String(format: "%.2f", Date().timeIntervalSince(processingStarted)), privacy: .public)s: local \(localASR.tokens.count, privacy: .public) tokens, remote \(remoteASR.tokens.count, privacy: .public) tokens, \(remoteSegments.count, privacy: .public) speaker segments"
                 )
                 document = MeetingDocument.format(
                     localASR: localASR,
                     remoteASR: remoteASR,
                     remoteSegments: remoteSegments,
                     duration: duration,
-                    recordedAt: Date()
+                    recordedAt: Date(),
+                    engineLabel: engineLabel
                 )
             }
             let url = try MeetingDocument.write(document)
@@ -348,13 +358,12 @@ final class MeetingPipeline: ObservableObject {
     }
 
     // Detailed ASR diagnostics. The "no speech detected" failures were invisible
-    // from the existing logs because we never recorded what Parakeet returned -
-    // this surfaces counts and confidence without copying transcript content
-    // into unified logs.
-    private func logASRResult(_ asr: ASRResult, track: String) {
-        let trimmed = asr.text.trimmingCharacters(in: .whitespacesAndNewlines)
+    // from the existing logs because we never recorded what the engine returned -
+    // this surfaces counts without copying transcript content into unified logs.
+    private func logASRResult(_ result: DetailedTranscription, track: String) {
+        let trimmed = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
         log.info(
-            "ASR[\(track, privacy: .public)]: \(asr.text.count, privacy: .public) chars, \(asr.tokenTimings?.count ?? 0, privacy: .public) tokens, confidence \(String(format: "%.2f", asr.confidence), privacy: .public), audio \(String(format: "%.2f", asr.duration), privacy: .public)s, empty \(trimmed.isEmpty, privacy: .public)"
+            "ASR[\(track, privacy: .public)]: \(result.text.count, privacy: .public) chars, \(result.tokens.count, privacy: .public) tokens, audio \(String(format: "%.2f", result.duration), privacy: .public)s, empty \(trimmed.isEmpty, privacy: .public)"
         )
     }
 

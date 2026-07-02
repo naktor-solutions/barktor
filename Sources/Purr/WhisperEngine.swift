@@ -93,6 +93,55 @@ final class WhisperEngine: TranscriptionEngine {
     func makeStreamingSession() async throws -> any StreamingSession {
         throw EngineError.streamingNotSupported(engineName: "Whisper")
     }
+
+    // WhisperKit's DTW word timings mapped to the engine-agnostic shape.
+    // MeetingDocument concatenates token text verbatim, so every word must
+    // carry its leading space (WhisperKit usually includes it; normalize
+    // the ones that don't so words never run together).
+    nonisolated static func timedTokens(from words: [WordTiming]) -> [DetailedTranscription.TimedToken] {
+        words.map { timing in
+            let text = timing.word.hasPrefix(" ") ? timing.word : " " + timing.word
+            return DetailedTranscription.TimedToken(
+                text: text,
+                start: TimeInterval(timing.start),
+                end: TimeInterval(timing.end)
+            )
+        }
+    }
+
+    // Detailed variant for meeting mode. Always the plain transcribe task
+    // with auto-detected language: the translate-to-English toggle is a
+    // dictation-only affordance, and a Spanish meeting must stay Spanish.
+    func transcribeDetailed(samples: [Float]) async throws -> DetailedTranscription {
+        if loadedModel != modelIdentifier { await warmup() }
+        guard let pipe = pipe else { throw EngineError.notLoaded }
+        let options = DecodingOptions(
+            verbose: false,
+            task: .transcribe,
+            language: nil,
+            temperature: 0.0,
+            sampleLength: 224,
+            usePrefillPrompt: true,
+            withoutTimestamps: false,
+            wordTimestamps: true
+        )
+        let started = Date()
+        let results: [TranscriptionResult] = try await pipe.transcribe(
+            audioArray: samples,
+            decodeOptions: options
+        )
+        let elapsed = Date().timeIntervalSince(started)
+        let words = results.flatMap(\.segments).flatMap { $0.words ?? [] }
+        let text = TranscriptCleaner.clean(results.map(\.text).joined(separator: " "))
+        log.info(
+            "Whisper detailed transcribe: \(samples.count, privacy: .public) samples in \(String(format: "%.2f", elapsed), privacy: .public)s, \(words.count, privacy: .public) word timings"
+        )
+        return DetailedTranscription(
+            text: text,
+            tokens: Self.timedTokens(from: words),
+            duration: TimeInterval(samples.count) / 16_000.0
+        )
+    }
 }
 
 enum EngineError: LocalizedError {

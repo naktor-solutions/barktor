@@ -11,6 +11,9 @@ protocol TranscriptionEngine: AnyObject {
 
     func warmup() async
     func transcribe(samples: [Float]) async throws -> String
+    // Batch transcription that also carries per-token timings, for callers
+    // (meeting mode) that align text against diarized speaker segments.
+    func transcribeDetailed(samples: [Float]) async throws -> DetailedTranscription
     func makeStreamingSession() async throws -> any StreamingSession
 }
 

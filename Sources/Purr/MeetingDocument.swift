@@ -2,16 +2,17 @@ import FluidAudio
 import Foundation
 import os.log
 
-// Merges a Parakeet ASRResult with a list of TimedSpeakerSegment into a
-// readable Markdown transcript with `**Speaker N:** ...` blocks.
+// Merges an engine-agnostic DetailedTranscription with a list of
+// TimedSpeakerSegment into a readable Markdown transcript with
+// `**Speaker N:** ...` blocks.
 //
 // Merge strategy: each token's midpoint chooses a speaker. Consecutive
-// same-speaker tokens get concatenated verbatim - Parakeet's BPE tokens
-// already carry leading spaces on word boundaries, so inserting our own
-// spaces breaks subwords ("H" + "ello" -> "H ello"). TranscriptCleaner
-// trims any leading whitespace at utterance boundaries. We rewrite
-// FluidAudio's stable speaker IDs ("speaker_0001") to display labels
-// ("Speaker 1") in the order they first speak.
+// same-speaker tokens get concatenated verbatim - Parakeet's BPE tokens and
+// Whisper's word timings both already carry leading spaces on word
+// boundaries, so inserting our own spaces breaks subwords ("H" + "ello" ->
+// "H ello"). TranscriptCleaner trims any leading whitespace at utterance
+// boundaries. We rewrite FluidAudio's stable speaker IDs ("speaker_0001") to
+// display labels ("Speaker 1") in the order they first speak.
 enum MeetingDocument {
     private static let log = Logger(subsystem: "com.arunbrahma.purr", category: "meetingdoc")
 
@@ -25,9 +26,10 @@ enum MeetingDocument {
     // track. A single voice never becomes "Speaker 1", and a short/quiet solo
     // clip can't be rejected by the diarizer.
     static func format(
-        localOnly asr: ASRResult,
+        localOnly asr: DetailedTranscription,
         duration: TimeInterval,
-        recordedAt: Date
+        recordedAt: Date,
+        engineLabel: String
     ) -> Output {
         let utterances = localUtterances(asr: asr)
 
@@ -35,7 +37,7 @@ enum MeetingDocument {
         body += "# Meeting - \(formatTimestamp(recordedAt))\n\n"
         body += "_Duration: \(formatDuration(duration))_  "
         body += "_Speakers: \(utterances.isEmpty ? 0 : 1)_  "
-        body += "_Engine: Parakeet TDT v2_\n\n"
+        body += "_Engine: \(engineLabel)_\n\n"
         body += "---\n\n"
 
         if utterances.isEmpty {
@@ -60,11 +62,12 @@ enum MeetingDocument {
     // remote track (system audio) is diarized into Speaker N; the local track
     // (echo-cancelled microphone) is the single local user, labelled You.
     static func format(
-        localASR: ASRResult,
-        remoteASR: ASRResult,
+        localASR: DetailedTranscription,
+        remoteASR: DetailedTranscription,
         remoteSegments: [TimedSpeakerSegment],
         duration: TimeInterval,
-        recordedAt: Date
+        recordedAt: Date,
+        engineLabel: String
     ) -> Output {
         let labelMap = buildLabelMap(segments: remoteSegments)
         var utterances = remoteUtterances(
@@ -78,7 +81,7 @@ enum MeetingDocument {
         body += "# Meeting - \(formatTimestamp(recordedAt))\n\n"
         body += "_Duration: \(formatDuration(duration))_  "
         body += "_Speakers: \(speakerCount)_  "
-        body += "_Engine: Parakeet TDT v2 + FluidAudio Diarizer_\n\n"
+        body += "_Engine: \(engineLabel) + FluidAudio Diarizer_\n\n"
         body += "---\n\n"
 
         if utterances.isEmpty {
@@ -119,21 +122,22 @@ enum MeetingDocument {
     private static let remoteFallbackSpeaker = "Remote"
 
     private static func remoteUtterances(
-        asr: ASRResult,
+        asr: DetailedTranscription,
         segments: [TimedSpeakerSegment],
         labelMap: [String: String]
     ) -> [TimedUtterance] {
-        guard let timings = asr.tokenTimings, !timings.isEmpty else {
+        let timings = asr.tokens
+        guard !timings.isEmpty else {
             return rawUtterance(asr: asr, speaker: remoteFallbackSpeaker)
         }
         guard !segments.isEmpty else {
             var result: [TimedUtterance] = []
             for timing in timings {
-                let token = timing.token
+                let token = timing.text
                 if token.trimmingCharacters(in: .whitespaces).isEmpty { continue }
                 appendToken(
-                    token, speaker: remoteFallbackSpeaker, start: timing.startTime,
-                    end: timing.endTime, into: &result)
+                    token, speaker: remoteFallbackSpeaker, start: timing.start,
+                    end: timing.end, into: &result)
             }
             return result.isEmpty
                 ? rawUtterance(asr: asr, speaker: remoteFallbackSpeaker) : result
@@ -142,32 +146,33 @@ enum MeetingDocument {
 
         var result: [TimedUtterance] = []
         for timing in timings {
-            let token = timing.token
+            let token = timing.text
             if token.trimmingCharacters(in: .whitespaces).isEmpty { continue }
-            let midpoint = (timing.startTime + timing.endTime) / 2.0
+            let midpoint = (timing.start + timing.end) / 2.0
             let speakerId = speakerAt(time: midpoint, segments: sorted)
             let label = labelMap[speakerId] ?? speakerId
             appendToken(
-                token, speaker: label, start: timing.startTime, end: timing.endTime,
+                token, speaker: label, start: timing.start, end: timing.end,
                 into: &result)
         }
         return result.isEmpty ? rawUtterance(asr: asr, speaker: remoteFallbackSpeaker) : result
     }
 
-    private static func localUtterances(asr: ASRResult) -> [TimedUtterance] {
-        guard let timings = asr.tokenTimings, !timings.isEmpty else { return [] }
+    private static func localUtterances(asr: DetailedTranscription) -> [TimedUtterance] {
+        let timings = asr.tokens
+        guard !timings.isEmpty else { return [] }
         var result: [TimedUtterance] = []
         for timing in timings {
-            let token = timing.token
+            let token = timing.text
             if token.trimmingCharacters(in: .whitespaces).isEmpty { continue }
             appendToken(
-                token, speaker: "You", start: timing.startTime, end: timing.endTime,
+                token, speaker: "You", start: timing.start, end: timing.end,
                 into: &result)
         }
         return result
     }
 
-    private static func rawUtterance(asr: ASRResult, speaker: String) -> [TimedUtterance] {
+    private static func rawUtterance(asr: DetailedTranscription, speaker: String) -> [TimedUtterance] {
         let cleaned = TranscriptCleaner.clean(asr.text)
         guard !cleaned.isEmpty else { return [] }
         return [

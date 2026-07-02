@@ -242,7 +242,7 @@ final class ParakeetEngine: TranscriptionEngine {
     }
 
     func transcribe(samples: [Float]) async throws -> String {
-        let detailed = try await transcribeDetailed(samples: samples)
+        let detailed = try await transcribeASR(samples: samples)
         return TranscriptCleaner.clean(detailed.text)
     }
 
@@ -254,7 +254,7 @@ final class ParakeetEngine: TranscriptionEngine {
     // `language: .english` is a no-op on v2 - it only drives v3's multilingual
     // script-aware token filter - but is left in so the call is correct if the
     // model version is ever switched back.
-    func transcribeDetailed(samples: [Float]) async throws -> ASRResult {
+    func transcribeASR(samples: [Float]) async throws -> ASRResult {
         if batchManager == nil { await warmup() }
         guard let manager = batchManager else { throw EngineError.notLoaded }
         var state = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
@@ -266,6 +266,10 @@ final class ParakeetEngine: TranscriptionEngine {
             "Parakeet transcribed \(samples.count, privacy: .public) samples in \(String(format: "%.2f", elapsed), privacy: .public)s"
         )
         return result
+    }
+
+    func transcribeDetailed(samples: [Float]) async throws -> DetailedTranscription {
+        DetailedTranscription(asrResult: try await transcribeASR(samples: samples))
     }
 
     func makeStreamingSession() async throws -> any StreamingSession {

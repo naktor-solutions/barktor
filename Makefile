@@ -61,6 +61,14 @@ export DEVELOPER_DIR
 # the FoundationModels macro code (see DEVELOPER_DIR above) CLT's toolchain
 # can't build. It also runs with DEVELOPER_DIR unset, since an exported
 # DEVELOPER_DIR pointing at a nonexistent Xcode.app breaks swift/xcrun outright.
+#
+# CLT's Testing.framework also ships a `.swiftcrossimport` overlay declaration
+# that auto-imports `_Testing_Foundation` whenever a file imports both Testing
+# and Foundation - but CLT's copy of that overlay framework has no Modules/
+# directory (its symlink points at a path that doesn't exist), so any test
+# file doing both imports fails with "no such module '_Testing_Foundation'".
+# -disable-cross-import-overlays turns off that auto-import; nothing in this
+# test target relies on the overlay's extra Date/URL formatting.
 CLT_FRAMEWORKS_DIR := /Library/Developer/CommandLineTools/Library/Developer/Frameworks
 
 .PHONY: app run test dmg notarize-app clean
@@ -103,7 +111,8 @@ ifeq ($(wildcard $(DEVELOPER_DIR)),)
 	env -u DEVELOPER_DIR swift test -Xswiftc -DNO_APPLE_FM \
 	  -Xswiftc -F -Xswiftc $(CLT_FRAMEWORKS_DIR) \
 	  -Xlinker -F -Xlinker $(CLT_FRAMEWORKS_DIR) \
-	  -Xlinker -rpath -Xlinker $(CLT_FRAMEWORKS_DIR)
+	  -Xlinker -rpath -Xlinker $(CLT_FRAMEWORKS_DIR) \
+	  -Xswiftc -Xfrontend -Xswiftc -disable-cross-import-overlays
 else
 	swift test
 endif

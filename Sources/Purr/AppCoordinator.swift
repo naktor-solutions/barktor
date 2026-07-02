@@ -178,7 +178,15 @@ final class AppCoordinator: ObservableObject {
         // on Bluetooth to avoid pinning it to SCO mode.
         recorder.allowsWarmKeeping = true
 
-        meeting = MeetingPipeline(parakeet: parakeet, hud: hud, summarizer: summarizer)
+        meeting = MeetingPipeline(
+            hud: hud,
+            summarizer: summarizer,
+            engineProvider: { [weak self] in
+                // Interim: always Parakeet. Task 7 switches this on the
+                // meeting.engine setting.
+                (self?.parakeet ?? ParakeetEngine(), "Parakeet TDT v2")
+            }
+        )
         voiceEditor = VoiceEditor(hud: hud) { [weak self] in
             // Voice-edit always uses whichever engine the user has selected
             // - they may want fast Tiny EN for edits even if Parakeet is
