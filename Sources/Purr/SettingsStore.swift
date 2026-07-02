@@ -26,6 +26,7 @@ final class SettingsStore: ObservableObject {
         static let autoPaste = "stt.autoPaste"
         static let onboardingDone = "onboarding.done"
         static let engine = "stt.engine"
+        static let meetingEngine = "meeting.engine"
         static let translateToEnglish = "stt.translateToEnglish"
         static let translationSourceLanguage = "stt.translationSourceLanguage"
         static let smartTyping = "ui.smartTyping"
@@ -134,6 +135,14 @@ final class SettingsStore: ObservableObject {
 
     @Published var engine: Engine {
         didSet { defaults.set(engine.rawValue, forKey: Keys.engine) }
+    }
+
+    // Engine used to transcribe meeting recordings, independent of the
+    // dictation engine: Parakeet v2 is English-only, so a Spanish meeting
+    // needs Whisper without forcing every dictation onto it. Meetings are
+    // batch-only, so Whisper's lack of streaming doesn't matter here.
+    @Published var meetingEngine: Engine {
+        didSet { defaults.set(meetingEngine.rawValue, forKey: Keys.meetingEngine) }
     }
 
     // Whisper-only: when on, transcription runs the X→English translate task
@@ -251,6 +260,9 @@ final class SettingsStore: ObservableObject {
         self.onboardingDone = defaults.bool(forKey: Keys.onboardingDone)
         let storedEngine = defaults.string(forKey: Keys.engine) ?? Engine.parakeet.rawValue
         self.engine = Engine(rawValue: storedEngine) ?? .parakeet
+        let storedMeetingEngine =
+            defaults.string(forKey: Keys.meetingEngine) ?? Engine.parakeet.rawValue
+        self.meetingEngine = Engine(rawValue: storedMeetingEngine) ?? .parakeet
         self.translateToEnglish = defaults.object(forKey: Keys.translateToEnglish) as? Bool ?? false
         self.translationSourceLanguage = defaults.string(forKey: Keys.translationSourceLanguage) ?? ""
         self.smartTyping = defaults.object(forKey: Keys.smartTyping) as? Bool ?? false
@@ -319,6 +331,7 @@ final class SettingsStore: ObservableObject {
         showMeetingHUD = true
         voiceEditEnabled = false
         engine = .parakeet
+        meetingEngine = .parakeet
         modelName = ModelManager.defaultModel
         translateToEnglish = false
         translationSourceLanguage = ""
