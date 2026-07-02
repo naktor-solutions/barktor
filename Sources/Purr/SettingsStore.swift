@@ -40,6 +40,8 @@ final class SettingsStore: ObservableObject {
         static let meetingsFolderPath = "meetings.folderPath"
         static let systemAudioNoticeShown = "meetings.systemAudioNoticeShown"
         static let historyAudioRetention = "history.audioRetention"
+        static let llmPostProcessLevel = "postprocess.llmLevel"
+        static let llmCustomInstructions = "postprocess.customInstructions"
     }
 
     // Which on-device LLM produces the meeting summary. Apple FM is the
@@ -150,6 +152,19 @@ final class SettingsStore: ObservableObject {
     // manually deleted; only the WAVs expire. "Never" keeps no audio at all.
     @Published var historyAudioRetention: AudioRetention {
         didSet { defaults.set(historyAudioRetention.rawValue, forKey: Keys.historyAudioRetention) }
+    }
+
+    // Optional LLM cleanup/rewrite of batch dictations. Off preserves the
+    // deterministic-only pipeline byte for byte; Smart Typing streams are
+    // never LLM-processed (the text is already typed sentence by sentence).
+    @Published var llmPostProcessLevel: LLMPostProcessLevel {
+        didSet { defaults.set(llmPostProcessLevel.rawValue, forKey: Keys.llmPostProcessLevel) }
+    }
+
+    // Free-form user guidance appended to the active level's prompt (e.g.
+    // "format enumerations as bullet lists").
+    @Published var llmCustomInstructions: String {
+        didSet { defaults.set(llmCustomInstructions, forKey: Keys.llmCustomInstructions) }
     }
 
     // Whisper-only: when on, transcription runs the X→English translate task
@@ -273,6 +288,10 @@ final class SettingsStore: ObservableObject {
         let storedRetention =
             defaults.string(forKey: Keys.historyAudioRetention) ?? AudioRetention.week.rawValue
         self.historyAudioRetention = AudioRetention(rawValue: storedRetention) ?? .week
+        let storedLLMLevel =
+            defaults.string(forKey: Keys.llmPostProcessLevel) ?? LLMPostProcessLevel.off.rawValue
+        self.llmPostProcessLevel = LLMPostProcessLevel(rawValue: storedLLMLevel) ?? .off
+        self.llmCustomInstructions = defaults.string(forKey: Keys.llmCustomInstructions) ?? ""
         self.translateToEnglish = defaults.object(forKey: Keys.translateToEnglish) as? Bool ?? false
         self.translationSourceLanguage = defaults.string(forKey: Keys.translationSourceLanguage) ?? ""
         self.smartTyping = defaults.object(forKey: Keys.smartTyping) as? Bool ?? false
@@ -343,6 +362,8 @@ final class SettingsStore: ObservableObject {
         engine = .parakeet
         meetingEngine = .parakeet
         historyAudioRetention = .week
+        llmPostProcessLevel = .off
+        llmCustomInstructions = ""
         modelName = ModelManager.defaultModel
         translateToEnglish = false
         translationSourceLanguage = ""
