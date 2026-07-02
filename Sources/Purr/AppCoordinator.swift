@@ -18,7 +18,9 @@ import os.log
 //
 // While a meeting is recording, dictation is suspended at the hotkey
 // layer - accidentally inserting batch transcripts mid-meeting would be
-// bad. Voice-edit is independent and can fire any time.
+// bad. Voice-edit is independent and can fire any time the meeting isn't
+// actively processing (see handleVoiceEditPress()) - during processing it
+// may share the same WhisperEngine instance as the meeting transcription.
 @MainActor
 final class AppCoordinator: ObservableObject {
     enum State: Equatable {
@@ -431,7 +433,7 @@ final class AppCoordinator: ObservableObject {
                 .init(
                     action: .voiceEdit,
                     hotkey: s.voiceEditHotkey,
-                    onPress: { [weak self] in self?.voiceEditor.handlePress() },
+                    onPress: { [weak self] in self?.handleVoiceEditPress() },
                     onRelease: { [weak self] in self?.voiceEditor.handleRelease() }
                 ))
         }
@@ -448,6 +450,26 @@ final class AppCoordinator: ObservableObject {
             ))
         hotkey.setBindings(bindings)
         hotkey.install()
+    }
+
+    // currentMeetingEngine() can hand meetings the very same WhisperEngine
+    // instance dictation/voice-edit uses (reused when the Settings model
+    // matches). WhisperKit is a plain class, not an actor - unlike FluidAudio's
+    // AsrManager, it does not serialize concurrent transcribes - so a voice-edit
+    // fired while the meeting pipeline is transcribing would run two
+    // `pipe.transcribe` calls on shared decoder state at once. Block only
+    // `.processing`: meeting transcription is a single batch pass that runs
+    // exclusively there, so `.recording` is safe (mirrors suspendDictation's
+    // silent-ignore behavior - no HUD message, just don't start).
+    private func handleVoiceEditPress() {
+        switch meeting.state {
+        case .processing:
+            log.info("Voice-edit press ignored: meeting is processing (shared engine may be busy).")
+            return
+        case .idle, .recording, .error:
+            break
+        }
+        voiceEditor.handlePress()
     }
 
     private func handleQuitHotkey() {

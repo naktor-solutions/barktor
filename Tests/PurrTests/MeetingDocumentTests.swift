@@ -52,4 +52,25 @@ struct MeetingDocumentTests {
         #expect(out.markdown.contains("**You:** vale"))
         #expect(out.markdown.contains("_Engine: Whisper (large-v3) + FluidAudio Diarizer_"))
     }
+
+    @Test func testDualTrackKeepsLocalTextWhenLocalTokensAreEmpty() {
+        // Whisper models without an alignment head can return text with zero
+        // word timings. The local (mic) side must not be silently dropped
+        // just because the remote side happened to produce real timings.
+        let local = DetailedTranscription(text: "vale", tokens: [], duration: 5)
+        let remote = DetailedTranscription(
+            text: "buenos dias", tokens: [token("buenos", 0, 0.4), token(" dias", 0.5, 0.9)],
+            duration: 5)
+        let segments = [
+            TimedSpeakerSegment(
+                speakerId: "speaker_0001", embedding: [], startTimeSeconds: 0.0,
+                endTimeSeconds: 1.0, qualityScore: 1.0)
+        ]
+        let out = MeetingDocument.format(
+            localASR: local, remoteASR: remote, remoteSegments: segments,
+            duration: 5, recordedAt: Date(timeIntervalSince1970: 0),
+            engineLabel: "Whisper (large-v3)")
+        #expect(out.markdown.contains("**You:** vale"))
+        #expect(out.markdown.contains("**Speaker 1:** buenos dias"))
+    }
 }

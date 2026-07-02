@@ -72,7 +72,14 @@ enum MeetingDocument {
         let labelMap = buildLabelMap(segments: remoteSegments)
         var utterances = remoteUtterances(
             asr: remoteASR, segments: remoteSegments, labelMap: labelMap)
-        utterances += localUtterances(asr: localASR)
+        // localUtterances() returns [] whenever localASR has no token timings -
+        // that's true both for genuine silence AND for a Whisper model with no
+        // alignment head, which can return real text with zero word timings.
+        // Only treat it as silence when the (cleaned) raw text is also empty;
+        // otherwise fall back to one unattributed "You" utterance so the
+        // user's side of the meeting isn't silently dropped.
+        let local = localUtterances(asr: localASR)
+        utterances += local.isEmpty ? rawUtterance(asr: localASR, speaker: "You") : local
         utterances.sort(by: { $0.startTime < $1.startTime })
 
         let speakerCount = Set(utterances.map(\.speaker)).count

@@ -33,9 +33,10 @@ final class MeetingPipeline: ObservableObject {
     // builds against the macOS 14.0 deployment target. nil when system audio
     // is unavailable or failed to start - the meeting is mic-only then.
     private var systemCapture: AnyObject?
-    // Resolved at stop() time so a Settings change between meetings takes
-    // effect without rebuilding the pipeline. The label feeds the transcript
-    // header ("_Engine: ..._").
+    // Resolved at stop() time, not when the pipeline is built or when
+    // recording starts - so whatever engine is selected in Settings when
+    // processing begins wins, even if the user changed it mid-recording.
+    // The label feeds the transcript header ("_Engine: ..._").
     private let engineProvider: () -> (engine: any TranscriptionEngine, label: String)
     private let diarizer = Diarizer()
     private let hud: RecordingHUD
@@ -211,6 +212,7 @@ final class MeetingPipeline: ObservableObject {
                 // can never be rejected with "no speech detected".
                 let asr = try await engine.transcribeDetailed(samples: samples)
                 logASRResult(asr, track: "mic")
+                warnIfMissingTimings(asr, track: "mic")
                 log.info(
                     "Meeting transcribe complete in \(String(format: "%.2f", Date().timeIntervalSince(processingStarted)), privacy: .public)s: \(asr.tokens.count, privacy: .public) tokens, single local speaker (You)"
                 )
@@ -233,7 +235,9 @@ final class MeetingPipeline: ObservableObject {
                 }.value
                 async let remoteSegmentsTask = diarizer.diarize(samples: systemSamples)
                 let remoteASR = try await engine.transcribeDetailed(samples: systemSamples)
+                warnIfMissingTimings(remoteASR, track: "remote")
                 let localASR = try await engine.transcribeDetailed(samples: cleanedMic)
+                warnIfMissingTimings(localASR, track: "local")
                 // As in the mic-only path, a diarization failure on the system
                 // track (no remote speech, music, near-silence) must not sink
                 // the meeting. Keep both transcripts; the remote side just
@@ -364,6 +368,20 @@ final class MeetingPipeline: ObservableObject {
         let trimmed = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
         log.info(
             "ASR[\(track, privacy: .public)]: \(result.text.count, privacy: .public) chars, \(result.tokens.count, privacy: .public) tokens, audio \(String(format: "%.2f", result.duration), privacy: .public)s, empty \(trimmed.isEmpty, privacy: .public)"
+        )
+    }
+
+    // Some engines (e.g. Whisper models without an alignment head) can return
+    // non-empty text with zero token timings. MeetingDocument still keeps that
+    // text (as an unattributed fallback utterance), but the track silently
+    // loses speaker/diarization attribution - this is the only trace of that
+    // degradation, since it never surfaces as an error.
+    private func warnIfMissingTimings(_ result: DetailedTranscription, track: String) {
+        guard result.tokens.isEmpty else { return }
+        let trimmed = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        log.warning(
+            "ASR[\(track, privacy: .public)]: non-empty text with no token timings - speaker attribution disabled for this track."
         )
     }
 
