@@ -53,5 +53,10 @@ let package = Package(
                 .enableUpcomingFeature("BareSlashRegexLiterals")
             ]
         ),
+        .testTarget(
+            name: "PurrTests",
+            dependencies: ["Purr"],
+            path: "Tests/PurrTests"
+        ),
     ]
 )
