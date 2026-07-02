@@ -49,6 +49,14 @@ final class HotkeyManager {
     private static let kRightShift: Int64 = 60
     private static let kRightOption: Int64 = 61
     private static let kRightControl: Int64 = 62
+    private static let kEscape: Int64 = 53
+
+    // F4: Esc cancels an in-flight dictation. Observed, not swallowed - the
+    // tap is listen-only, so the frontmost app still receives the key. All
+    // gating (are we even recording?) lives in the handler on the main
+    // actor; dispatching an occasional no-op closure is cheaper than
+    // reading coordinator state from the tap thread.
+    var onEscape: (() -> Void)?
 
     init() {}
 
@@ -126,6 +134,13 @@ final class HotkeyManager {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap = tap { CGEvent.tapEnable(tap: tap, enable: true) }
             return
+        }
+
+        if type == .keyDown,
+            event.getIntegerValueField(.keyboardEventKeycode) == Self.kEscape,
+            event.flags.intersection([.maskCommand, .maskAlternate, .maskShift, .maskControl]).isEmpty
+        {
+            DispatchQueue.main.async { [weak self] in self?.onEscape?() }
         }
 
         for binding in bindings {

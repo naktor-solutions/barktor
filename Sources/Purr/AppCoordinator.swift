@@ -138,6 +138,10 @@ final class AppCoordinator: ObservableObject {
     // setup task can bail out instead of starting a recording nobody wants.
     private var streamingStartupInFlight = false
     private var releasedDuringStartup = false
+    // Set by cancelStreamingRecording() so runStreamingTask's post-loop
+    // trailing-space insert knows to stay silent - Esc means no further
+    // insertion, full stop.
+    private var streamingCancelledByUser = false
 
     // Quit callback delivered by AppDelegate. Stored so the global tap hotkey
     // can drive the same code path as the status-bar Quit menu item.
@@ -417,6 +421,7 @@ final class AppCoordinator: ObservableObject {
     }
 
     private func installHotkeys() {
+        hotkey.onEscape = { [weak self] in self?.cancelDictation() }
         let s = SettingsStore.shared
         var bindings: [HotkeyManager.Binding] = [
             .init(
@@ -615,12 +620,91 @@ final class AppCoordinator: ObservableObject {
     }
 
     private func finishRecording() async {
+        // After an Esc cancel the hotkey release still arrives; the recorder
+        // is already stopped and the Cancelled message is on the HUD - a
+        // stale finish must not wipe it or re-enter the batch flow.
+        guard state == .recording else { return }
         SoundCues.play(.recordingStopped)
         if streamingSession != nil {
             await finishStreamingRecording()
         } else {
             await finishBatchRecording()
         }
+    }
+
+    // Esc during recording discards the dictation without ever calling an
+    // engine. The audio still lands in history as a cancelled entry
+    // (retryable), so a mistaken Esc loses nothing but the keystrokes.
+    func cancelDictation() {
+        guard state == .recording else { return }
+        SoundCues.play(.dictationCancelled)
+        if streamingSession != nil {
+            Task { await cancelStreamingRecording() }
+        } else {
+            cancelBatchRecording()
+        }
+    }
+
+    private func cancelBatchRecording() {
+        levelTask?.cancel()
+        levelTask = nil
+        recordingStartedAt = nil
+        let samples = recorder.stop()
+        let seconds = Double(samples.count) / 16_000.0
+        if samples.count >= 16_000 * 4 / 10 {
+            let entryID = UUID()
+            HistoryStore.shared.add(
+                DictationEntry(
+                    id: entryID, date: Date(), duration: seconds,
+                    rawText: nil, processedText: nil,
+                    engineUsed: Self.engineUsedLabel(
+                        engine: SettingsStore.shared.engine,
+                        modelName: SettingsStore.shared.modelName),
+                    mode: .batch, status: .cancelled, errorMessage: nil, audioFilename: nil))
+            HistoryStore.shared.persistAudio(id: entryID, samples: samples)
+        }
+        state = .idle
+        hud.showMessage("Cancelled", autoHideAfter: 1.5)
+    }
+
+    private func cancelStreamingRecording() async {
+        levelTask?.cancel()
+        levelTask = nil
+        recordingStartedAt = nil
+        streamingCancelledByUser = true
+        let samples = recorder.stop()
+        let seconds = Double(samples.count) / 16_000.0
+        hud.setPreviewActive(false)
+        guard let session = streamingSession else {
+            state = .idle
+            hud.showMessage("Cancelled", autoHideAfter: 1.5)
+            return
+        }
+        // Same teardown order as finishStreamingRecording's failure path:
+        // cancel the session (closes the events stream), drain the consumer,
+        // then kill the feed. No further text is inserted - the trailing
+        // space is suppressed by streamingCancelledByUser.
+        await session.cancel()
+        let texts = await streamingTask?.value
+        feedTask?.cancel()
+        feedTask = nil
+        streamingSession = nil
+        streamingTask = nil
+        if samples.count >= 16_000 * 4 / 10 {
+            let entryID = UUID()
+            HistoryStore.shared.add(
+                DictationEntry(
+                    id: entryID, date: Date(), duration: seconds,
+                    rawText: texts.flatMap { $0.raw.isEmpty ? nil : $0.raw },
+                    processedText: texts.flatMap { $0.processed.isEmpty ? nil : $0.processed },
+                    engineUsed: Self.engineUsedLabel(
+                        engine: SettingsStore.shared.engine,
+                        modelName: SettingsStore.shared.modelName),
+                    mode: .streaming, status: .cancelled, errorMessage: nil, audioFilename: nil))
+            HistoryStore.shared.persistAudio(id: entryID, samples: samples)
+        }
+        state = .idle
+        hud.showMessage("Cancelled", autoHideAfter: 1.5)
     }
 
     // ------------------------------------------------------------------
@@ -770,6 +854,7 @@ final class AppCoordinator: ObservableObject {
     private func beginStreamingRecording() {
         streamingStartupInFlight = true
         releasedDuringStartup = false
+        streamingCancelledByUser = false
         Task {
             do {
                 let session = try await engine.makeStreamingSession()
@@ -904,7 +989,10 @@ final class AppCoordinator: ObservableObject {
         // Separate dictation sessions so the next press doesn't butt up
         // ("worldfoo"): one trailing space, unless the last sentence already
         // ended in whitespace (e.g. a "new line" command).
-        if let last = committed.last?.last, !last.isWhitespace {
+        //
+        // Skip the session-separator space when the user cancelled - "no
+        // further insertion" is the whole point of Esc.
+        if !streamingCancelledByUser, let last = committed.last?.last, !last.isWhitespace {
             inserter.insert(" ")
         }
 
