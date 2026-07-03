@@ -38,21 +38,27 @@ final class Updater: ObservableObject {
     @Published private(set) var state: State = .idle
 
     private static let releasesAPI = URL(
-        string: "https://api.github.com/repos/iamarunbrahma/purr/releases/latest"
+        string: "https://api.github.com/repos/naktor-solutions/naktor-purr/releases/latest"
     )!
     // Disambiguation probe for /releases/latest 404s: GitHub returns 404 both
     // when the repo is gone and when the repo exists but has zero releases.
-    // Hitting the repo root tells the two apart.
+    // Hitting the repo root tells the two apart. (While the repo is private,
+    // both endpoints 404 for the unauthenticated app, so this reports the
+    // repo as missing - expected until the fork goes public.)
     private static let repoAPI = URL(
-        string: "https://api.github.com/repos/iamarunbrahma/purr"
+        string: "https://api.github.com/repos/naktor-solutions/naktor-purr"
     )!
 
-    private let log = Logger(subsystem: "com.arunbrahma.purr", category: "updater")
+    private let log = Logger(subsystem: "com.naktor.purr", category: "updater")
     private var downloader: UpdateDownloader?
 
-    var currentVersion: String {
+    // Static so views that only need the number (Settings) don't need the
+    // updater instance.
+    static var installedVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
     }
+
+    var currentVersion: String { Self.installedVersion }
 
     @MainActor
     func checkForUpdates() async {

@@ -117,7 +117,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.activate(ignoringOtherApps: true)
             return
         }
-        let view = SettingsView(coordinator: coordinator).textSelection(.enabled)
+        let view = SettingsView(
+            coordinator: coordinator,
+            onShowAbout: { [weak self] in self?.showAbout() }
+        ).textSelection(.enabled)
         let host = NSHostingController(rootView: view)
         let win = NSWindow(contentViewController: host)
         win.title = "Purr - Settings"

@@ -21,8 +21,13 @@ struct SettingsView: View {
     // Observed so the Delete Models gate reacts live to Parakeet / EOU download
     // progress, which are @Published on the coordinator.
     @ObservedObject var coordinator: AppCoordinator
+    // Settings is reachable without the menu bar icon (reopening the app),
+    // so it must offer a way into About too - a crowded menu bar or the
+    // notch would otherwise make the version/updater/changelog unreachable.
+    private let onShowAbout: () -> Void
 
-    init(coordinator: AppCoordinator) {
+    init(coordinator: AppCoordinator, onShowAbout: @escaping () -> Void = {}) {
+        self.onShowAbout = onShowAbout
         self._coordinator = ObservedObject(wrappedValue: coordinator)
         _diarizerVM = StateObject(
             wrappedValue: FluidModelViewModel(
@@ -150,6 +155,9 @@ struct SettingsView: View {
                 Text("Subtle sounds when recording starts, stops, or is cancelled.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                LabeledContent("Version \(Updater.installedVersion)") {
+                    Button("About Purr…") { onShowAbout() }
+                }
             }
 
             Section {
@@ -1443,7 +1451,7 @@ final class LLMSummaryViewModel: ObservableObject {
     }
 
     func delete() {
-        let log = Logger(subsystem: "com.arunbrahma.purr", category: "summarizer")
+        let log = Logger(subsystem: "com.naktor.purr", category: "summarizer")
         log.info("Gemma delete: starting.")
 
         let appleFallbackUsable: Bool
