@@ -54,27 +54,92 @@ final class SettingsStore: ObservableObject {
         var id: String { rawValue }
     }
 
+    // Ordered Live-first so the streaming engines (the app's flagship Smart
+    // Typing) lead: English-live → multilingual-live → multilingual-fast →
+    // widest-coverage. This order drives every picker (dictation + meeting) and
+    // the history retry menu. rawValue is unchanged, so persistence is safe.
     enum Engine: String, Codable, CaseIterable, Identifiable {
         case parakeet
+        case nemotron
         case parakeetV3
         case whisper
         var id: String { rawValue }
+
+        // Model codename, shown as the row title in the selector and as the
+        // plain label in the meeting-engine picker and history retry menu.
         var label: String {
             switch self {
-            case .parakeet: return "Parakeet TDT v2 (recommended)"
-            case .parakeetV3: return "Parakeet TDT v3 (multilingual)"
+            case .parakeet: return "Parakeet TDT v2"
+            case .nemotron: return "Nemotron"
+            case .parakeetV3: return "Parakeet TDT v3"
             case .whisper: return "Whisper"
             }
         }
+
+        // One honest benefit line under the selector row. Positioning grounded
+        // in the measured es/en WER bake-off: v2 is English-only (es unusable),
+        // v3 is the fastest accurate multilingual batch, Nemotron trades a hair
+        // of accuracy for the only live multilingual typing, Whisper is the most
+        // accurate + widest and can translate to English.
         var summary: String {
             switch self {
             case .parakeet:
+                return "Fastest and most accurate English. Types live as you speak. English only."
+            case .nemotron:
                 return
-                    "10× faster on Apple Silicon. English-only, top accuracy. No silence hallucinations. Streaming-capable."
+                    "40 languages incl. Spanish, typed live as you speak — the only multilingual engine with Smart Typing."
             case .parakeetV3:
                 return
-                    "25 European languages incl. Spanish. Fast on Apple Silicon, auto-detects language. Batch only (no Smart Typing)."
-            case .whisper: return "100+ languages including Asian and Arabic. Batch only."
+                    "25 European languages incl. Spanish. The fastest multilingual option; inserts when you finish speaking."
+            case .whisper:
+                return
+                    "100+ languages incl. Chinese, Japanese, and Arabic. Our most accurate engine; can translate speech to English."
+            }
+        }
+
+        // Compact language-scope badge for the selector row.
+        var languageBadge: String {
+            switch self {
+            case .parakeet: return "English"
+            case .nemotron: return "40 languages"
+            case .parakeetV3: return "25 languages"
+            case .whisper: return "100+ languages"
+            }
+        }
+
+        // Decision-helping stats on the selector row, from the FLEURS es/en WER
+        // bake-off (8 clips, M5 Pro — approximate, small sample; see the
+        // barktor-asr-engine-bakeoff note). Word accuracy ≈ 100 − WER, rounded,
+        // shown in the engine's dominant language. All cluster at 95-98%, which
+        // is the honest takeaway: pick by language + Smart Typing, not decimals.
+        var accuracyStat: String {
+            switch self {
+            case .parakeet: return "≈95% English"
+            case .nemotron: return "≈96% Spanish"
+            case .parakeetV3: return "≈97% Spanish"
+            case .whisper: return "≈98% Spanish"
+            }
+        }
+
+        // Speed as latency for the live engines (throughput is the wrong lens
+        // when it types as you speak) and as ×real-time for the batch engines.
+        var speedStat: String {
+            switch self {
+            case .parakeet: return "Fastest · types live"
+            case .nemotron: return "Live · 60 ms to first word"
+            case .parakeetV3: return "~110× real-time"
+            case .whisper: return "~45× real-time"
+            }
+        }
+
+        // Engines that can stream partials for Smart Typing (live preview +
+        // insert as you speak): Parakeet v2 via its separate EOU model,
+        // Nemotron intrinsically. Whisper and Parakeet v3 are batch-only.
+        // Doubles as the "Live" badge flag in the selector.
+        var supportsSmartTyping: Bool {
+            switch self {
+            case .parakeet, .nemotron: return true
+            case .parakeetV3, .whisper: return false
             }
         }
     }

@@ -423,8 +423,9 @@ final class StreamingEouAsrSession: StreamingSession {
 
 // Shared between the @Sendable partial callback (manager actor) and the
 // @MainActor session. NSLock keeps the callback synchronous; an actor
-// would force a Task hop that races finish()'s stream closure.
-private final class PartialDiff: @unchecked Sendable {
+// would force a Task hop that races finish()'s stream closure. Internal (not
+// private) so NemotronStreamingSession reuses the same append-only diff.
+final class PartialDiff: @unchecked Sendable {
     private let lock = NSLock()
     private var lastEmitted: String = ""
 

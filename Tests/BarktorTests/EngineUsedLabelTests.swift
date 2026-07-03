@@ -11,6 +11,10 @@ struct EngineUsedLabelTests {
         #expect(AppCoordinator.engineUsedLabel(engine: .parakeetV3, modelName: "ignored") == "parakeet-v3")
     }
 
+    @Test func nemotronIsBareIdentifier() {
+        #expect(AppCoordinator.engineUsedLabel(engine: .nemotron, modelName: "ignored") == "nemotron")
+    }
+
     @Test func whisperCarriesModelName() {
         #expect(
             AppCoordinator.engineUsedLabel(engine: .whisper, modelName: "openai_whisper-small")

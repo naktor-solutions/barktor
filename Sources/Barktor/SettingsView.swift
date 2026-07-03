@@ -141,28 +141,6 @@ struct SettingsView: View {
                     }
             }
 
-            Section("Smart Typing") {
-                Toggle("Smart Typing (live preview)", isOn: $settings.smartTyping)
-                    .disabled(!engineSupportsStreaming || !eouInstalled || !settings.autoPaste)
-                    .help(smartTypingHelpText)
-                if !engineSupportsStreaming {
-                    Label(
-                        "Requires Parakeet. Switch the engine in the Engine tab.",
-                        systemImage: "info.circle"
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                } else if !settings.autoPaste {
-                    Label(
-                        "Requires \"Paste transcribed text at cursor automatically\" above.",
-                        systemImage: "info.circle"
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                }
-                EOUCard(coordinator: coordinator, isInstalled: $eouInstalled)
-            }
-
             Section("Post-processing") {
                 Toggle("Trim filler words (\"um\", \"uh\")", isOn: $settings.trimFillers)
                 Toggle(
@@ -208,7 +186,6 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .onAppear { eouInstalled = ParakeetEngine.eouIsInstalled() }
     }
 
     // ------------------------------------------------------------------
@@ -218,37 +195,13 @@ struct SettingsView: View {
     private var engineTab: some View {
         Form {
             Section("Speech engine") {
-                Picker("Engine", selection: $settings.engine) {
-                    ForEach(SettingsStore.Engine.allCases) { engine in
-                        Text(engine.label).tag(engine)
-                    }
+                ForEach(SettingsStore.Engine.allCases) { engine in
+                    EngineRow(
+                        engine: engine,
+                        isSelected: settings.engine == engine,
+                        onSelect: { selectEngine(engine) }
+                    )
                 }
-                .pickerStyle(.radioGroup)
-                .onChange(of: settings.engine) { _, newValue in
-                    // Whisper has no streaming engine; clear the toggle so
-                    // it doesn't stay "on" with no effect. Switching back
-                    // to Parakeet doesn't re-enable it - explicit opt-in.
-                    if newValue == .whisper {
-                        settings.smartTyping = false
-                        // If the persisted Whisper model can't translate
-                        // (Turbo or any English-only build), force Translate
-                        // off so the toggle isn't stuck on against a row
-                        // that disables it.
-                        if !ModelManager.supportsTranslation(settings.modelName) {
-                            settings.translateToEnglish = false
-                        }
-                    }
-                    // Parakeet v3 is batch-only (no EOU model); clear Smart Typing
-                    // so it isn't stuck "on" with no effect, same as Whisper.
-                    if newValue == .parakeetV3 {
-                        settings.smartTyping = false
-                    }
-                    coordinator.reloadEngine()
-                }
-
-                Text(settings.engine.summary)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
             }
 
             if settings.engine == .whisper {
@@ -306,12 +259,24 @@ struct SettingsView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+            } else if settings.engine == .nemotron {
+                Section("Multilingual engine") {
+                    NemotronEngineCard(coordinator: coordinator)
+                }
             } else {
                 Section("Parakeet engine") {
                     ParakeetEngineCard(
                         coordinator: coordinator,
                         version: settings.engine == .parakeetV3 ? .v3 : .v2)
                 }
+            }
+
+            // Smart Typing lives with the engine that provides it: only shown
+            // for streaming-capable engines, and it surfaces its own extra
+            // download (Parakeet's EOU) when there is one - Nemotron streams on
+            // its own, so no extra card appears.
+            if settings.engine.supportsSmartTyping {
+                smartTypingSection
             }
         }
         .formStyle(.grouped)
@@ -776,21 +741,62 @@ struct SettingsView: View {
         .padding(.vertical, 4)
     }
 
-    private var smartTypingHelpText: String {
-        if !engineSupportsStreaming {
-            return "Available with Parakeet. Whisper has no streaming engine."
+    // Selecting an engine from the Engine tab's radio rows. Mirrors what the old
+    // Picker's onChange did: clear Smart Typing when the new engine can't stream,
+    // drop a stuck Translate toggle on a non-translating Whisper model, reload.
+    private func selectEngine(_ engine: SettingsStore.Engine) {
+        guard settings.engine != engine else { return }
+        settings.engine = engine
+        if !engine.supportsSmartTyping { settings.smartTyping = false }
+        if engine == .whisper, !ModelManager.supportsTranslation(settings.modelName) {
+            settings.translateToEnglish = false
         }
-        if !eouInstalled {
-            return "Requires the Parakeet EOU 120M model below."
-        }
-        if !settings.autoPaste {
-            return "Turn on \"Paste transcribed text at cursor automatically\" above to use Smart Typing."
-        }
-        return "Shows a live preview as you speak, then inserts each sentence when you pause."
+        coordinator.reloadEngine()
     }
 
-    private var engineSupportsStreaming: Bool {
-        settings.engine == .parakeet
+    // Smart Typing section for the Engine tab, shown only for streaming-capable
+    // engines. Parakeet v2 needs its separate EOU model, so its download card
+    // appears here; Nemotron streams with its own model, so no extra card.
+    @ViewBuilder
+    private var smartTypingSection: some View {
+        Section("Smart Typing") {
+            Toggle("Smart Typing (live preview)", isOn: $settings.smartTyping)
+                .disabled(!smartTypingAvailable)
+                .help(smartTypingHelpText)
+            Text("Types a live preview as you speak, inserting each sentence when you pause.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if !settings.autoPaste {
+                Label(
+                    "Requires \u{201C}Paste transcribed text at cursor automatically\u{201D} in General.",
+                    systemImage: "info.circle"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            if settings.engine == .parakeet {
+                EOUCard(coordinator: coordinator, isInstalled: $eouInstalled)
+            }
+        }
+    }
+
+    // Smart Typing is usable when auto-paste is on, the engine can stream, and
+    // its streaming weights are present. Parakeet v2 gates on its separate EOU
+    // model; Nemotron streams with its own engine model, so no extra gate.
+    private var smartTypingAvailable: Bool {
+        guard settings.autoPaste, settings.engine.supportsSmartTyping else { return false }
+        if settings.engine == .parakeet { return eouInstalled }
+        return true
+    }
+
+    private var smartTypingHelpText: String {
+        if !settings.autoPaste {
+            return "Turn on \"Paste transcribed text at cursor automatically\" in General to use Smart Typing."
+        }
+        if settings.engine == .parakeet, !eouInstalled {
+            return "Download the streaming model below to enable Smart Typing."
+        }
+        return "Shows a live preview as you speak, then inserts each sentence when you pause."
     }
 
     // The Translate toggle is meaningful only on a multilingual, non-turbo
@@ -897,6 +903,70 @@ final class FluidModelViewModel: ObservableObject {
 }
 
 // ----------------------------------------------------------------------
+// Engine selector row - Engine tab. Codename title + language and Live/Batch
+// badges + one honest benefit line + approx size. The whole row is the tap
+// target for selection, like the Whisper ModelRow.
+// ----------------------------------------------------------------------
+
+private struct EngineRow: View {
+    let engine: SettingsStore.Engine
+    let isSelected: Bool
+    let onSelect: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
+                .foregroundColor(isSelected ? .accentColor : .secondary)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(engine.label).font(.body.weight(.medium))
+                    badge(engine.languageBadge, accent: false)
+                    // Same name as the section below; the accent pill flags the
+                    // engines that unlock it. Batch engines get no pill - their
+                    // benefit line already says "inserts when you finish".
+                    if engine.supportsSmartTyping {
+                        badge("Smart Typing", accent: true)
+                    }
+                }
+                Text(engine.summary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 12) {
+                    stat("checkmark.seal", engine.accuracyStat)
+                    stat("bolt", engine.speedStat)
+                }
+                .padding(.top, 1)
+            }
+        }
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .onTapGesture { onSelect() }
+    }
+
+    // Small pill. "Smart Typing" takes the accent tint to draw the eye to the
+    // app's flagship streaming engines; the language pill stays quiet gray.
+    private func badge(_ text: String, accent: Bool) -> some View {
+        Text(text)
+            .font(.caption2.weight(.medium))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background((accent ? Color.accentColor : Color.secondary).opacity(0.15), in: Capsule())
+            .foregroundStyle(accent ? Color.accentColor : Color.secondary)
+    }
+
+    // One decision stat: an SF Symbol + monospaced-digit value, quiet gray.
+    private func stat(_ icon: String, _ text: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon).font(.caption2)
+            Text(text).font(.caption).monospacedDigit()
+        }
+        .foregroundStyle(.secondary)
+    }
+}
+
+// ----------------------------------------------------------------------
 // Parakeet engine card - Engine tab. Unlike the EOU / diarizer cards (which
 // only download on an explicit tap), Parakeet TDT v2 also auto-downloads
 // during warm-up, so its progress comes from the coordinator's shared download
@@ -998,8 +1068,89 @@ private struct ParakeetEngineCard: View {
     }
 }
 
+// Nemotron multilingual streaming card. Like ParakeetEngineCard but for the
+// single ~600 MB multilingual model; download/delete route through the
+// coordinator and progress comes from `nemotronProgress`.
+private struct NemotronEngineCard: View {
+    @ObservedObject var coordinator: AppCoordinator
+    @State private var isInstalled: Bool = NemotronStreamingEngine.isInstalled
+    @State private var error: String?
+
+    var body: some View {
+        let progress = coordinator.nemotronProgress
+        let downloading = progress != nil
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text("Multilingual streaming (Nemotron)").font(.body.weight(.medium))
+                    Text("~600 MB").foregroundStyle(.secondary).font(.caption)
+                    if downloading {
+                        Text("downloading…").foregroundStyle(.secondary).font(.caption2)
+                    } else if !isInstalled, error == nil {
+                        Text("not yet downloaded").foregroundStyle(.secondary).font(.caption2)
+                    }
+                }
+                Text(
+                    "40 languages incl. Spanish, with live Smart Typing. Downloads on first use."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                if let progress {
+                    ProgressView(value: progress)
+                        .progressViewStyle(.linear)
+                        .padding(.top, 2)
+                }
+                if let error {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        Text(error).foregroundStyle(.secondary)
+                    }
+                    .font(.caption)
+                    .padding(.top, 2)
+                }
+            }
+            Spacer()
+            if downloading {
+                // Progress bar already conveys state.
+            } else if isInstalled {
+                Button("Delete", role: .destructive) { delete() }
+                    .controlSize(.small)
+            } else {
+                Button("Download") { download() }
+                    .controlSize(.small)
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(.vertical, 4)
+        .onAppear { isInstalled = NemotronStreamingEngine.isInstalled }
+        .onChange(of: coordinator.nemotronProgress) { _, newValue in
+            if newValue == nil { isInstalled = NemotronStreamingEngine.isInstalled }
+        }
+    }
+
+    private func download() {
+        error = nil
+        Task {
+            if case .failed(let err) = await coordinator.downloadNemotronModel() {
+                error = err.localizedDescription
+            }
+            isInstalled = NemotronStreamingEngine.isInstalled
+        }
+    }
+
+    private func delete() {
+        error = nil
+        switch coordinator.deleteNemotronModel() {
+        case .ok: isInstalled = false
+        case .busy: error = "Finish the current dictation or meeting, then try again."
+        case .failed(let err): error = err.localizedDescription
+        }
+    }
+}
+
 // ----------------------------------------------------------------------
-// Parakeet EOU 120M card - Smart Typing section (General tab). Like the
+// Parakeet EOU 120M card - Smart Typing section (Engine tab). Like the
 // Parakeet engine card, the EOU model auto-downloads during warm-up (gated on
 // Smart Typing being on), so its progress comes from the coordinator's shared
 // download state - that's what shows a bar for an auto-download, not just a

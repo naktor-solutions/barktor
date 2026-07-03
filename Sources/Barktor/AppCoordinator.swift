@@ -93,6 +93,10 @@ final class AppCoordinator: ObservableObject {
     // card show a live bar when warm-up downloads EOU, not just a manual tap.
     @Published private(set) var eouDownloadProgress: Double?
 
+    // 0..1 while the Nemotron multilingual weights download, nil otherwise.
+    // Fed by NemotronStreamingEngine.onProgress; read by its Settings card.
+    @Published private(set) var nemotronProgress: Double?
+
     // True while a meeting session is in flight (recording or processing).
     // Feeds menuBarStatus; a meeting outranks dictation/voice-edit for the glyph.
     private var meetingActive = false
@@ -117,6 +121,9 @@ final class AppCoordinator: ObservableObject {
     private var engine: any TranscriptionEngine = ParakeetEngine()
     private var parakeet = ParakeetEngine()
     private var parakeetV3 = ParakeetEngine(version: .v3)
+    // Nemotron multilingual streaming — the only multilingual engine that
+    // supports Smart Typing (Parakeet v3 and Whisper are batch-only).
+    private var nemotron = NemotronStreamingEngine()
     private let summarizer = MeetingSummarizer.shared
     private var meeting: MeetingPipeline!
     private var voiceEditor: VoiceEditor!
@@ -178,6 +185,9 @@ final class AppCoordinator: ObservableObject {
         // variant is active (and downloading) at a time.
         parakeetV3.onBatchProgress = { [weak self] fraction in
             self?.parakeetBatchProgress = fraction
+        }
+        nemotron.onProgress = { [weak self] fraction in
+            self?.nemotronProgress = fraction
         }
 
         // Smart Typing requires the EOU model, and that model is fetched only
@@ -336,6 +346,37 @@ final class AppCoordinator: ObservableObject {
         return .ok
     }
 
+    func downloadNemotronModel() async -> ModelDownloadResult {
+        do {
+            try await nemotron.downloadAndLoad()
+            return .ok
+        } catch {
+            return .failed(error)
+        }
+    }
+
+    func deleteNemotronModel() -> DiarizerDeleteResult {
+        switch state {
+        case .recording, .transcribing: return .busy
+        case .idle, .error: break
+        }
+        if streamingSession != nil || streamingStartupInFlight { return .busy }
+        if nemotronProgress != nil { return .busy }
+        switch meeting.state {
+        case .recording, .processing: return .busy
+        case .idle, .error: break
+        }
+        if voiceEditState != .idle { return .busy }
+        nemotron.unload()
+        do {
+            try NemotronStreamingEngine.deleteAll()
+        } catch {
+            return .failed(error)
+        }
+        log.info("Nemotron multilingual deleted on user request.")
+        return .ok
+    }
+
     @discardableResult
     func deleteEOUModel() -> DiarizerDeleteResult {
         // Refuse mid-session so we don't unload the manager out from
@@ -365,7 +406,9 @@ final class AppCoordinator: ObservableObject {
         guard canQuitSafely() else { return .busy }
         if streamingSession != nil || streamingStartupInFlight { return .busy }
         if voiceEditState != .idle { return .busy }
-        if parakeetBatchProgress != nil || eouDownloadProgress != nil { return .busy }
+        if parakeetBatchProgress != nil || eouDownloadProgress != nil || nemotronProgress != nil {
+            return .busy
+        }
 
         // Release every in-memory session so no deleted file stays mmap'd behind
         // a live handle (and so we reclaim the unified memory).
@@ -374,6 +417,7 @@ final class AppCoordinator: ObservableObject {
         parakeet.unloadStreamingManager()
         parakeet.unloadBatchManager()
         parakeetV3.unloadBatchManager()
+        nemotron.unload()
 
         do {
             try ModelManager.deleteAllModels()
@@ -415,11 +459,18 @@ final class AppCoordinator: ObservableObject {
         case .parakeet:
             engine = parakeet
             parakeetV3.unloadBatchManager()  // don't hold both ~1GB pipes at once
+            nemotron.unload()
         case .parakeetV3:
             engine = parakeetV3
             parakeet.unloadBatchManager()
+            nemotron.unload()
+        case .nemotron:
+            engine = nemotron
+            parakeet.unloadBatchManager()
+            parakeetV3.unloadBatchManager()
         case .whisper:
             engine = WhisperEngine(modelName: SettingsStore.shared.modelName)
+            nemotron.unload()
         }
         if !initial {
             log.info("Engine switched to \(chosen.rawValue, privacy: .public)")
@@ -437,6 +488,8 @@ final class AppCoordinator: ObservableObject {
             return (parakeet, "Parakeet TDT v2")
         case .parakeetV3:
             return (parakeetV3, "Parakeet TDT v3")
+        case .nemotron:
+            return (nemotron, "Multilingual (Nemotron)")
         case .whisper:
             let model = SettingsStore.shared.modelName
             if let existing = engine as? WhisperEngine, existing.modelIdentifier == model {
@@ -1256,6 +1309,7 @@ final class AppCoordinator: ObservableObject {
             switch choice {
             case .parakeet: engine = parakeet
             case .parakeetV3: engine = parakeetV3
+            case .nemotron: engine = nemotron
             case .whisper: engine = WhisperEngine(modelName: model)
             }
             let raw = try await engine.transcribe(samples: prepared)
@@ -1289,6 +1343,7 @@ final class AppCoordinator: ObservableObject {
         switch engine {
         case .parakeet: return "parakeet"
         case .parakeetV3: return "parakeet-v3"
+        case .nemotron: return "nemotron"
         case .whisper: return "whisper:\(modelName)"
         }
     }

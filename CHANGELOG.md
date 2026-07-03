@@ -10,9 +10,13 @@ Work in progress toward 0.4.0. Not yet released.
 - The first transcription after switching to a Whisper engine could hang for many minutes. Loading a Whisper model runs a one-time Apple Neural Engine compile; a missing guard let the background warm-up and the first dictation compile the same model at once, thrashing the Neural Engine. Warm-ups are now coalesced so the model compiles exactly once.
 
 ### Added
+- **Multilingual live dictation (new engine).** A new **Multilingual** engine (NVIDIA Nemotron, on the Apple Neural Engine) transcribes 40 languages including Spanish **with live Smart Typing** — the words appear as you speak, not only when you finish. It's the only multilingual engine that streams; Parakeet v3 and Whisper stay batch-only. Downloads ~600 MB on first use from Settings › Engine.
 - Choose which microphone to record from in Settings › General. The pick is remembered by device (so it survives reconnects and reboots) and falls back to the system default when that device isn't plugged in; "System Default" keeps the previous behavior of following whatever macOS selects.
 - Whisper models now warm up as soon as they finish downloading, so the one-time Neural Engine compile happens under the download's own progress instead of on your first dictation.
 - The status pill shows "Warming up…" instead of "Transcribing" while a cold model is still loading, so a slow first run is no longer mistaken for a stuck transcription.
+
+### Changed
+- **Settings › Engine, reworked.** Smart Typing moved here from General and now lives with the engine that provides it, shown only for engines that can stream — so it's no longer offered where it can't run. The engine picker was redesigned: each option shows its language coverage, a Smart Typing badge, and at-a-glance accuracy and speed, so it's clear which one to pick. On the Multilingual engine, Smart Typing no longer needs the separate Parakeet EOU download.
 
 ## [0.3.0] - 2026-07-03
 

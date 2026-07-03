@@ -223,6 +223,7 @@ private struct HistoryRow: View {
     private var engineDisplayName: String {
         if entry.engineUsed == "parakeet" { return "Parakeet" }
         if entry.engineUsed == "parakeet-v3" { return "Parakeet v3" }
+        if entry.engineUsed == "nemotron" { return "Multilingual" }
         if entry.engineUsed.hasPrefix("whisper:") {
             let modelID = String(entry.engineUsed.dropFirst("whisper:".count))
             return "Whisper · \(ModelManager.shortLabel(forModel: modelID))"
