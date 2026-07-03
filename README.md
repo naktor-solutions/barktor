@@ -1,8 +1,11 @@
 <div align="center">
 
-<img src="Resources/purr_app_logo.png" alt="Purr" width="180" height="180">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="Resources/naktor-logo-white.svg">
+  <img src="Resources/naktor-logo.svg" alt="Naktor" width="360">
+</picture>
 
-# Purr
+# Naktor Purr
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-black?logo=apple)](#)
