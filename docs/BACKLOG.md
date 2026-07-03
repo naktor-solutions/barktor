@@ -23,6 +23,22 @@ Hoy solo hay presets (el README lo admite). Un recorder tipo MASShortcut en Sett
 cualquier combinación a dictado/meeting/voice-edit. Tocaría `HotkeyManager` y los bindings de
 `AppCoordinator.installHotkeys()`.
 
+### B9 — Procesado de reuniones en segundo plano: aviso, progreso y notificación
+Feedback de UAT real (2026-07-03): una reunión larga funciona bien pero el pill "Transcribing" se
+queda quieto durante minutos y parece que la app está colgada. Tres piezas: (1) al parar, aviso
+claro de que la transcripción sigue en segundo plano; (2) progreso consultable en la app (pill con
+% y/o estado en el menú — whisper.cpp expone `progress_callback`, Parakeet procesa por chunks, así
+que hay señal real de avance en ambos motores); (3) notificación del sistema (UNUserNotificationCenter)
+al terminar, con click que revela el transcript/summary en vez del `activateFileViewerSelecting`
+inmediato de hoy. Tocaría el protocolo `TranscriptionEngine` (canal de progreso), `MeetingPipeline`,
+`RecordingHUD` y `MenuBarController`. Decisión de diseño (UAT 2026-07-03): **sí se encola** — se permite grabar una reunión nueva mientras
+la anterior transcribe. Requisito estructural: persistir el audio a WAV en disco al parar (la cola
+son ficheros, no arrays en RAM — hoy una reunión de 90 min son ~660 MB en memoria con dos pistas, y
+encolar en RAM no escala en Macs de 8 GB). Cola FIFO serial (una transcripción a la vez), QoS
+`utility` para no competir con la videollamada activa, y de regalo: recuperación ante crash
+(mismo principio persist-before-transcribe de F2).
+*Prioridad alta: viene de fricción observada en uso real, no de speculación.*
+
 ## Más caras / delicadas (evaluar tras la siguiente ronda)
 
 ### B4 — Pase LLM final para Smart Typing
