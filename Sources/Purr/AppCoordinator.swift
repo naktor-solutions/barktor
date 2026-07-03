@@ -554,6 +554,11 @@ final class AppCoordinator: ObservableObject {
         return false
     }
 
+    // Double-tap hands-free lock (hold-to-talk only). The arbiter owns the
+    // timing rules; pendingHoldStop is the deferred-stop timer it arms.
+    private var handsFree = HandsFreeLock()
+    private var pendingHoldStop: Task<Void, Never>?
+
     private func handleTranscribePress() {
         if hud.shouldIgnorePress(whileBusy: dictationBusy) {
             log.info("Transcribe press ignored: HUD message up or transcription in flight.")
@@ -573,7 +578,19 @@ final class AppCoordinator: ObservableObject {
         )
         switch SettingsStore.shared.hotkeyMode {
         case .holdToTalk:
-            beginRecording()
+            switch handsFree.press(at: ContinuousClock.now, recordingAlive: dictationAlive) {
+            case .begin:
+                cancelPendingHoldStop()
+                beginRecording()
+            case .lock:
+                // Double-tap: the deferred stop is abandoned, the recording
+                // keeps running with no key held until the next press. The
+                // HUD staying up after the release is the feedback.
+                cancelPendingHoldStop()
+                log.info("Hands-free lock engaged - dictation runs until the next press.")
+            case .stop:
+                performHoldStop()
+            }
         case .toggle:
             switch state {
             case .idle, .error: beginRecording()
@@ -588,6 +605,44 @@ final class AppCoordinator: ObservableObject {
             "Transcribe release received (state=\(String(describing: self.state), privacy: .public), startupInFlight=\(self.streamingStartupInFlight, privacy: .public))"
         )
         guard SettingsStore.shared.hotkeyMode == .holdToTalk else { return }
+        switch handsFree.release(at: ContinuousClock.now) {
+        case .ignore:
+            break
+        case .stop:
+            performHoldStop()
+        case .deferStop:
+            // The hold was tap-short: hold the stop back briefly so a quick
+            // second press can turn it into a hands-free lock instead.
+            pendingHoldStop?.cancel()
+            pendingHoldStop = Task { [weak self] in
+                try? await Task.sleep(for: HandsFreeLock.secondPressWindow)
+                guard let self, !Task.isCancelled else { return }
+                self.pendingHoldStop = nil
+                if self.handsFree.deferredStopFired() { self.performHoldStop() }
+            }
+        }
+    }
+
+    private var dictationAlive: Bool { state == .recording || streamingStartupInFlight }
+
+    // A hotkey-mode switch mid-gesture must not leave a lock or an armed
+    // deferred stop behind: a stale timer could otherwise stop a dictation
+    // started moments later in toggle mode.
+    func hotkeyModeChanged() {
+        handsFree.reset()
+        cancelPendingHoldStop()
+    }
+
+    private func cancelPendingHoldStop() {
+        pendingHoldStop?.cancel()
+        pendingHoldStop = nil
+    }
+
+    // The stop half of hold-to-talk, shared by direct releases, deferred
+    // (double-tap window) releases, and the locked-mode stop press. Stale
+    // calls are safe: finishRecording guards on state, and re-flagging
+    // releasedDuringStartup is idempotent.
+    private func performHoldStop() {
         if state == .recording {
             Task { await finishRecording() }
         } else if streamingStartupInFlight {
@@ -640,6 +695,10 @@ final class AppCoordinator: ObservableObject {
     // (retryable), so a mistaken Esc loses nothing but the keystrokes.
     func cancelDictation() {
         guard state == .recording else { return }
+        // Esc kills the dictation the lock refers to: drop the lock and any
+        // deferred stop so the next press reads as a fresh start.
+        handsFree.reset()
+        cancelPendingHoldStop()
         SoundCues.play(.dictationCancelled)
         if streamingSession != nil {
             // Close the TOCTOU window before the async teardown: the hotkey

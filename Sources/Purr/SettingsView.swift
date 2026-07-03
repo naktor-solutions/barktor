@@ -63,6 +63,13 @@ struct SettingsView: View {
                     }
                 }
                 .pickerStyle(.segmented)
+                .onChange(of: settings.hotkeyMode) { coordinator.hotkeyModeChanged() }
+
+                if settings.hotkeyMode == .holdToTalk {
+                    Text("Tip: press twice quickly to lock dictation hands-free, then press once to stop.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
 
                 LabeledContent("Hotkey", value: settings.hotkey.displayName)
 
