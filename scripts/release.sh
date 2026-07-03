@@ -83,7 +83,7 @@ STAGE=dist/dmg-stage MNT=dist/dmg-mnt RW=dist/Barktor-rw.dmg
 rm -rf "$DMG" "$RW" "$STAGE" "$MNT"
 mkdir -p "$STAGE/.background"
 cp -Rp "$APP" "$STAGE/"
-cp Resources/dmg-launch-window.png "$STAGE/.background/background.png"
+cp Resources/dmg-launch-window.tiff "$STAGE/.background/background.tiff"
 cp Resources/dmg-DS_Store "$STAGE/.DS_Store"
 cp Resources/AppIcon.icns "$STAGE/.VolumeIcon.icns"
 ln -s /Applications "$STAGE/Applications"

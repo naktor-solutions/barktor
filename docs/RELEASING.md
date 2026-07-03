@@ -64,7 +64,7 @@ Replace these files, then commit and release as usual:
 | --- | --- |
 | `Resources/AppIcon.icns` | App icon, About window, DMG volume icon |
 | `Resources/barktor_menubar_glyph.pdf` | Menu-bar status item (template image: monochrome, alpha-only, ~18 pt) |
-| `Resources/dmg-launch-window.png` | DMG install-window background (640×400ish, includes the drag arrow) |
+| `Resources/dmg-launch-window.tiff` | DMG install-window background (600×440 pt, includes the drag arrow). HiDPI multi-page TIFF so it stays sharp on Retina — regenerate with `tiffutil -cathidpicheck bg_1x.png bg_2x.png -out dmg-launch-window.tiff` from 600×440 and 1200×880 renders |
 
 (The README header uses the Naktor wordmark, `Resources/naktor-logo*.svg`.)
 

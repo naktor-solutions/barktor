@@ -14,6 +14,8 @@ All notable changes to Barktor are documented here. The format follows
   updating.
 - Default meetings folder is now
   `~/Library/Application Support/Barktor/Meetings`.
+- The DMG install window was redrawn for Barktor and is now sharp on
+  Retina displays.
 
 ### Added
 - New Barktor app icon and menu-bar glyph.

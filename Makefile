@@ -15,7 +15,7 @@ DMG           := dist/$(APP_NAME).dmg
 DMG_RW        := dist/$(APP_NAME)-rw.dmg
 DMG_STAGE     := dist/dmg-stage
 DMG_MNT       := dist/dmg-mnt
-DMG_BG        := Resources/dmg-launch-window.png
+DMG_BG        := Resources/dmg-launch-window.tiff
 # Pre-baked Finder window settings (window bounds, icon positions, background
 # picture pointer). Copied verbatim into every DMG so layout no longer depends
 # on osascript + Finder, which fails intermittently on macOS Sequoia/Tahoe
@@ -144,7 +144,7 @@ dmg: notarize-app
 	@rm -rf $(DMG) $(DMG_RW) $(DMG_STAGE)
 	@mkdir -p $(DMG_STAGE)/.background
 	@cp -R $(APP_DIR) $(DMG_STAGE)/
-	@cp $(DMG_BG) $(DMG_STAGE)/.background/background.png
+	@cp $(DMG_BG) $(DMG_STAGE)/.background/background.tiff
 	@cp $(DMG_DS_STORE) $(DMG_STAGE)/.DS_Store
 	@# Volume icon: Finder shows .VolumeIcon.icns for the mounted disk (and the
 	@# .dmg file itself) once the volume root carries the kHasCustomIcon bit.
