@@ -229,52 +229,59 @@ private struct HistoryRow: View {
         return entry.engineUsed
     }
 
+    private var hasRawVariant: Bool {
+        entry.rawText != nil && entry.processedText != nil && entry.rawText != entry.processedText
+    }
+
+    // Wispr-style cluster: Copy is the common action so it gets its own
+    // button; everything else lives behind the ellipsis.
     private var actions: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 6) {
             if isRetrying {
                 ProgressView().controlSize(.small)
-            } else if canRetry {
-                Menu {
-                    ForEach(SettingsStore.Engine.allCases) { engine in
-                        Button(engine.label) { onRetry(engine) }
+            } else {
+                Button {
+                    guard let text = shownText, !text.isEmpty else { return }
+                    onCopy(text)
+                    justCopied = true
+                    Task {
+                        try? await Task.sleep(for: .seconds(1))
+                        justCopied = false
                     }
                 } label: {
-                    Image(systemName: "arrow.clockwise")
+                    Image(systemName: justCopied ? "checkmark" : "doc.on.doc")
+                }
+                .help("Copy text")
+                .disabled(shownText?.isEmpty != false)
+                Menu {
+                    if canRetry {
+                        Menu("Retry transcript") {
+                            ForEach(SettingsStore.Engine.allCases) { engine in
+                                Button(engine.label) { onRetry(engine) }
+                            }
+                        }
+                    }
+                    if hasRawVariant {
+                        Toggle("Show raw transcription", isOn: $showRaw)
+                    }
+                    Button("Export audio as WAV…", action: onExport)
+                        .disabled(!canExport)
+                    Divider()
+                    Button("Delete transcript", role: .destructive) {
+                        showDeleteConfirmation = true
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
                 }
                 .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
                 .fixedSize()
-                .help("Retry transcription")
-            }
-            Button {
-                guard let text = shownText, !text.isEmpty else { return }
-                onCopy(text)
-                justCopied = true
-                Task {
-                    try? await Task.sleep(for: .seconds(1))
-                    justCopied = false
-                }
-            } label: {
-                Image(systemName: justCopied ? "checkmark" : "doc.on.doc")
-            }
-            .help("Copy text")
-            .disabled(shownText?.isEmpty != false)
-            if entry.rawText != nil, entry.processedText != nil, entry.rawText != entry.processedText {
-                Toggle("Raw", isOn: $showRaw).toggleStyle(.button)
-                    .help("Show the unprocessed transcription")
-            }
-            Button(action: onExport) { Image(systemName: "square.and.arrow.up") }
-                .help("Export audio as WAV")
-                .disabled(!canExport)
-            Button(role: .destructive, action: { showDeleteConfirmation = true }) {
-                Image(systemName: "trash")
-            }
-            .help("Delete entry")
-            .disabled(isRetrying)
-            .confirmationDialog("Delete this entry?", isPresented: $showDeleteConfirmation) {
-                Button("Delete", role: .destructive, action: onDelete)
+                .help("More options")
             }
         }
-        .controlSize(.small)
         .buttonStyle(.borderless)
+        .confirmationDialog("Delete this entry?", isPresented: $showDeleteConfirmation) {
+            Button("Delete", role: .destructive, action: onDelete)
+        }
     }
 }
