@@ -337,6 +337,47 @@ struct SettingsView: View {
                 MeetingSummarySection(vm: voiceEditLLM)
             }
 
+            Section("AI cleanup") {
+                Picker("Level", selection: $settings.llmPostProcessLevel) {
+                    ForEach(LLMPostProcessLevel.allCases) { level in
+                        Text(level.label).tag(level)
+                    }
+                }
+                .pickerStyle(.segmented)
+                Text(settings.llmPostProcessLevel.summary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if settings.llmPostProcessLevel != .off {
+                    if settings.smartTyping {
+                        Text(
+                            "AI cleanup applies only when Smart Typing is off - streamed text is already typed sentence by sentence."
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    }
+                    if !voiceEditLLM.isInstalled {
+                        Text(
+                            "Uses the same local Gemma model as Meeting summary - download it there first. Until then, dictations get the standard cleanup."
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Custom instructions")
+                        TextEditor(text: $settings.llmCustomInstructions)
+                            .font(.body)
+                            .frame(height: 60)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 4)
+                                    .stroke(Color.secondary.opacity(0.3))
+                            )
+                        Text("Added to the prompt, e.g. \"format enumerations as bullet lists\".")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
             Section("Voice Editing Mode") {
                 Toggle(
                     "Enable voice editing",
