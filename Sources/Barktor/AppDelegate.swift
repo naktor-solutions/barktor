@@ -25,6 +25,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onQuit: { NSApp.terminate(nil) }
         )
 
+        // Give the app a menu bar for when it's promoted to .regular (a window
+        // is open). Harmless while .accessory - macOS simply doesn't show it.
+        installMainMenu()
+
         // Wire the global Quit hotkey (⌃⌥Q) through the same closure the
         // status-bar Quit item uses, so a hotkey press and a menu click are
         // indistinguishable downstream.
@@ -65,8 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showOnboarding() {
         if let win = onboardingWindow {
-            win.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            present(win)
             return
         }
         // textSelection lets the user drag-select and copy any text in the
@@ -87,15 +90,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         win.styleMask = [.titled, .closable]
         win.center()
         win.isReleasedWhenClosed = false
-        win.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
         onboardingWindow = win
+        observeClose(win)
+        present(win)
     }
 
     private func showAbout() {
         if let win = aboutWindow {
-            win.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            present(win)
             return
         }
         let view = AboutView(updater: updater, coordinator: coordinator).textSelection(.enabled)
@@ -106,15 +108,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         win.setContentSize(NSSize(width: 380, height: 332))
         win.center()
         win.isReleasedWhenClosed = false
-        win.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
         aboutWindow = win
+        observeClose(win)
+        present(win)
     }
 
     private func showSettings() {
         if let win = settingsWindow {
-            win.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            present(win)
             return
         }
         let view = SettingsView(
@@ -128,15 +129,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         win.setContentSize(NSSize(width: 560, height: 600))
         win.center()
         win.isReleasedWhenClosed = false
-        win.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
         settingsWindow = win
+        observeClose(win)
+        present(win)
     }
 
     private func showHistory() {
         if let win = historyWindow {
-            win.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            present(win)
             return
         }
         let view = HistoryView(coordinator: coordinator).textSelection(.enabled)
@@ -147,8 +147,89 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         win.setContentSize(NSSize(width: 560, height: 520))
         win.center()
         win.isReleasedWhenClosed = false
-        win.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
         historyWindow = win
+        observeClose(win)
+        present(win)
     }
+
+    // ------------------------------------------------------------------
+    // Dock / Cmd-Tab presence
+    // ------------------------------------------------------------------
+
+    // Bring a window forward and reconcile Dock/Cmd-Tab presence. Every show
+    // path funnels through here so the activation policy is never left stale.
+    private func present(_ window: NSWindow) {
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        syncActivationPolicy()
+    }
+
+    // Barktor launches as .accessory (menu-bar only: no Dock icon, absent from
+    // Cmd-Tab). Fine until a window is open and the user switches away - there's
+    // then no way back except hunting for the status-bar glyph. So we promote to
+    // .regular (Dock icon + Cmd-Tab entry) whenever any of our windows is
+    // visible, and demote back to .accessory when the last one closes, melting
+    // the app back into the menu bar. The RecordingHUD panel isn't tracked here,
+    // so dictation never spawns a Dock icon.
+    private func syncActivationPolicy() {
+        let anyVisible = [onboardingWindow, settingsWindow, historyWindow, aboutWindow]
+            .contains { $0?.isVisible == true }
+        NSApp.setActivationPolicy(anyVisible ? .regular : .accessory)
+    }
+
+    // Recount presence when a window closes. willClose fires *before* the
+    // window's isVisible flips to false, so defer one runloop tick before
+    // recounting. Windows are created once (isReleasedWhenClosed = false) and
+    // reused, so each observer is registered once and lives for the app's
+    // lifetime - no token bookkeeping needed.
+    // ponytail: observer token intentionally discarded; app-lifetime by design.
+    private func observeClose(_ window: NSWindow) {
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification, object: window, queue: .main
+        ) { [weak self] _ in
+            DispatchQueue.main.async { self?.syncActivationPolicy() }
+        }
+    }
+
+    // A minimal main menu. In .accessory mode macOS shows no menu bar, but the
+    // moment syncActivationPolicy() promotes the app to .regular the top-of-
+    // screen menu bar appears - and without this it would be empty. The Edit
+    // menu is the real payoff: its standard items give ⌘X/⌘C/⌘V/⌘A a home so
+    // they finally work inside the Settings and History text fields.
+    private func installMainMenu() {
+        let mainMenu = NSMenu()
+
+        // App menu (rendered bold, titled after the app). Reuses the same
+        // actions the status-bar menu offers.
+        let appItem = NSMenuItem()
+        mainMenu.addItem(appItem)
+        let appMenu = NSMenu()
+        appItem.submenu = appMenu
+        appMenu.addItem(withTitle: "About Barktor", action: #selector(menuAbout), keyEquivalent: "")
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Settings…", action: #selector(menuSettings), keyEquivalent: ",")
+        appMenu.addItem(.separator())
+        // ⌘Q quits the focused app the way every Mac app does; the global ⌃⌥Q
+        // hotkey (HotkeyManager) still quits when no window has focus.
+        appMenu.addItem(withTitle: "Quit Barktor", action: #selector(menuQuit), keyEquivalent: "q")
+        for item in appMenu.items where item.action != nil { item.target = self }
+
+        // Edit menu - target stays nil so each command routes down the responder
+        // chain to whichever text field is first responder.
+        let editItem = NSMenuItem()
+        mainMenu.addItem(editItem)
+        let editMenu = NSMenu(title: "Edit")
+        editItem.submenu = editMenu
+        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(
+            withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+
+        NSApp.mainMenu = mainMenu
+    }
+
+    @objc private func menuAbout() { showAbout() }
+    @objc private func menuSettings() { showSettings() }
+    @objc private func menuQuit() { NSApp.terminate(nil) }
 }
