@@ -1,6 +1,9 @@
 <div align="center">
 
-<img src="Resources/barktor_app_logo.png" alt="Barktor" width="180" height="180">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="Resources/naktor-logo-white.svg">
+  <img src="Resources/naktor-logo.svg" alt="Naktor" width="360">
+</picture>
 
 # Barktor
 

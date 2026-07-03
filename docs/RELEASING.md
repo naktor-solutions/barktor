@@ -62,8 +62,9 @@ Replace these files, then commit and release as usual:
 | --- | --- |
 | `Resources/AppIcon.icns` | App icon, About window, DMG volume icon |
 | `Resources/barktor_menubar_glyph.pdf` | Menu-bar status item (template image: monochrome, alpha-only, ~18 pt) |
-| `Resources/barktor_app_logo.png` | README header |
 | `Resources/dmg-launch-window.png` | DMG install-window background (640×400ish, includes the drag arrow) |
+
+(The README header uses the Naktor wordmark, `Resources/naktor-logo*.svg`.)
 
 Add a CHANGELOG line for the new icon under the release's section.
 `make app` / `release.sh` copy these into the bundle automatically; icons are
