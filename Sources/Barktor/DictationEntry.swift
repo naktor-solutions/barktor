@@ -9,7 +9,7 @@ struct DictationEntry: Codable, Identifiable, Equatable {
     let duration: TimeInterval
     var rawText: String?
     var processedText: String?
-    var engineUsed: String  // "parakeet" | "whisper:<model>"
+    var engineUsed: String  // "parakeet" | "parakeet-v3" | "whisper:<model>"
     let mode: Mode
     var status: Status
     var errorMessage: String?  // set when status == .failed

@@ -1,3 +1,4 @@
+import FluidAudio
 import SwiftUI
 import os.log
 
@@ -210,6 +211,11 @@ struct SettingsView: View {
                             settings.translateToEnglish = false
                         }
                     }
+                    // Parakeet v3 is batch-only (no EOU model); clear Smart Typing
+                    // so it isn't stuck "on" with no effect, same as Whisper.
+                    if newValue == .parakeetV3 {
+                        settings.smartTyping = false
+                    }
                     coordinator.reloadEngine()
                 }
 
@@ -275,7 +281,9 @@ struct SettingsView: View {
                 }
             } else {
                 Section("Parakeet engine") {
-                    ParakeetEngineCard(coordinator: coordinator)
+                    ParakeetEngineCard(
+                        coordinator: coordinator,
+                        version: settings.engine == .parakeetV3 ? .v3 : .v2)
                 }
             }
         }
@@ -871,8 +879,23 @@ final class FluidModelViewModel: ObservableObject {
 
 private struct ParakeetEngineCard: View {
     @ObservedObject var coordinator: AppCoordinator
-    @State private var isInstalled = ParakeetEngine.batchIsInstalled()
+    let version: AsrModelVersion
+    @State private var isInstalled: Bool
     @State private var error: String?
+
+    init(coordinator: AppCoordinator, version: AsrModelVersion) {
+        self.coordinator = coordinator
+        self.version = version
+        _isInstalled = State(initialValue: ParakeetEngine.batchIsInstalled(version))
+    }
+
+    private var title: String { version == .v2 ? "Parakeet TDT v2" : "Parakeet TDT v3" }
+    private var sizeLabel: String { version == .v2 ? "~450 MB" : "~600 MB" }
+    private var blurb: String {
+        version == .v2
+            ? "Batch dictation, meetings, and voice editing. Downloads on first use."
+            : "Multilingual batch dictation (25 European languages incl. Spanish). Downloads on first use."
+    }
 
     var body: some View {
         let progress = coordinator.parakeetBatchProgress
@@ -880,15 +903,15 @@ private struct ParakeetEngineCard: View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
-                    Text("Parakeet TDT v2").font(.body.weight(.medium))
-                    Text("~450 MB").foregroundStyle(.secondary).font(.caption)
+                    Text(title).font(.body.weight(.medium))
+                    Text(sizeLabel).foregroundStyle(.secondary).font(.caption)
                     if downloading {
                         Text("downloading…").foregroundStyle(.secondary).font(.caption2)
                     } else if !isInstalled, error == nil {
                         Text("not yet downloaded").foregroundStyle(.secondary).font(.caption2)
                     }
                 }
-                Text("Batch dictation, meetings, and voice editing. Downloads on first use.")
+                Text(blurb)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if let progress {
@@ -919,27 +942,28 @@ private struct ParakeetEngineCard: View {
             }
         }
         .padding(.vertical, 4)
-        .onAppear { isInstalled = ParakeetEngine.batchIsInstalled() }
+        .onAppear { isInstalled = ParakeetEngine.batchIsInstalled(version) }
+        .onChange(of: version) { _, _ in isInstalled = ParakeetEngine.batchIsInstalled(version) }
         .onChange(of: coordinator.parakeetBatchProgress) { _, newValue in
             // A download just finished (or was cleared); re-check disk so the
             // card flips to Delete / Download correctly.
-            if newValue == nil { isInstalled = ParakeetEngine.batchIsInstalled() }
+            if newValue == nil { isInstalled = ParakeetEngine.batchIsInstalled(version) }
         }
     }
 
     private func download() {
         error = nil
         Task {
-            if case .failed(let err) = await coordinator.downloadParakeetModel() {
+            if case .failed(let err) = await coordinator.downloadParakeetModel(version) {
                 error = err.localizedDescription
             }
-            isInstalled = ParakeetEngine.batchIsInstalled()
+            isInstalled = ParakeetEngine.batchIsInstalled(version)
         }
     }
 
     private func delete() {
         error = nil
-        switch coordinator.deleteParakeetModel() {
+        switch coordinator.deleteParakeetModel(version) {
         case .ok: isInstalled = false
         case .busy: error = "Finish the current dictation or meeting, then try again."
         case .failed(let err): error = err.localizedDescription

@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import FluidAudio
 import Foundation
 import os.log
 
@@ -115,6 +116,7 @@ final class AppCoordinator: ObservableObject {
     // both ~1GB pipes into memory.
     private var engine: any TranscriptionEngine = ParakeetEngine()
     private var parakeet = ParakeetEngine()
+    private var parakeetV3 = ParakeetEngine(version: .v3)
     private let summarizer = MeetingSummarizer.shared
     private var meeting: MeetingPipeline!
     private var voiceEditor: VoiceEditor!
@@ -171,6 +173,11 @@ final class AppCoordinator: ObservableObject {
         }
         parakeet.onEOUProgress = { [weak self] fraction in
             self?.eouDownloadProgress = fraction
+        }
+        // v3 shares the same batch-progress @Published; only one Parakeet
+        // variant is active (and downloading) at a time.
+        parakeetV3.onBatchProgress = { [weak self] fraction in
+            self?.parakeetBatchProgress = fraction
         }
 
         // Smart Typing requires the EOU model, and that model is fetched only
@@ -290,9 +297,9 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
-    func downloadParakeetModel() async -> ModelDownloadResult {
+    func downloadParakeetModel(_ version: AsrModelVersion = .v2) async -> ModelDownloadResult {
         do {
-            try await parakeet.downloadAndLoadBatchManager()
+            try await (version == .v2 ? parakeet : parakeetV3).downloadAndLoadBatchManager()
             return .ok
         } catch {
             return .failed(error)
@@ -303,7 +310,7 @@ final class AppCoordinator: ObservableObject {
     // while any of those is mid-flight rather than unloading the manager out
     // from under a running utterance.
     @discardableResult
-    func deleteParakeetModel() -> DiarizerDeleteResult {
+    func deleteParakeetModel(_ version: AsrModelVersion = .v2) -> DiarizerDeleteResult {
         switch state {
         case .recording, .transcribing: return .busy
         case .idle, .error: break
@@ -315,13 +322,13 @@ final class AppCoordinator: ObservableObject {
         case .idle, .error: break
         }
         if voiceEditState != .idle { return .busy }
-        parakeet.unloadBatchManager()
+        (version == .v2 ? parakeet : parakeetV3).unloadBatchManager()
         do {
-            try ParakeetEngine.batchDelete()
+            try ParakeetEngine.batchDelete(version)
         } catch {
             return .failed(error)
         }
-        log.info("Parakeet TDT batch deleted on user request.")
+        log.info("Parakeet TDT \(version == .v2 ? "v2" : "v3", privacy: .public) batch deleted on user request.")
         return .ok
     }
 
@@ -362,6 +369,7 @@ final class AppCoordinator: ObservableObject {
         meeting.unloadDiarizer()
         parakeet.unloadStreamingManager()
         parakeet.unloadBatchManager()
+        parakeetV3.unloadBatchManager()
 
         do {
             try ModelManager.deleteAllModels()
@@ -402,6 +410,10 @@ final class AppCoordinator: ObservableObject {
         switch chosen {
         case .parakeet:
             engine = parakeet
+            parakeetV3.unloadBatchManager()  // don't hold both ~1GB pipes at once
+        case .parakeetV3:
+            engine = parakeetV3
+            parakeet.unloadBatchManager()
         case .whisper:
             engine = WhisperEngine(modelName: SettingsStore.shared.modelName)
         }
@@ -419,6 +431,8 @@ final class AppCoordinator: ObservableObject {
         switch choice {
         case .parakeet:
             return (parakeet, "Parakeet TDT v2")
+        case .parakeetV3:
+            return (parakeetV3, "Parakeet TDT v3")
         case .whisper:
             let model = SettingsStore.shared.modelName
             if let existing = engine as? WhisperEngine, existing.modelIdentifier == model {
@@ -1237,6 +1251,7 @@ final class AppCoordinator: ObservableObject {
             let engine: any TranscriptionEngine
             switch choice {
             case .parakeet: engine = parakeet
+            case .parakeetV3: engine = parakeetV3
             case .whisper: engine = WhisperEngine(modelName: model)
             }
             let raw = try await engine.transcribe(samples: prepared)
@@ -1269,6 +1284,7 @@ final class AppCoordinator: ObservableObject {
     ) -> String {
         switch engine {
         case .parakeet: return "parakeet"
+        case .parakeetV3: return "parakeet-v3"
         case .whisper: return "whisper:\(modelName)"
         }
     }

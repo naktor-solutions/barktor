@@ -55,11 +55,13 @@ final class SettingsStore: ObservableObject {
 
     enum Engine: String, Codable, CaseIterable, Identifiable {
         case parakeet
+        case parakeetV3
         case whisper
         var id: String { rawValue }
         var label: String {
             switch self {
             case .parakeet: return "Parakeet TDT v2 (recommended)"
+            case .parakeetV3: return "Parakeet TDT v3 (multilingual)"
             case .whisper: return "Whisper"
             }
         }
@@ -68,6 +70,9 @@ final class SettingsStore: ObservableObject {
             case .parakeet:
                 return
                     "10× faster on Apple Silicon. English-only, top accuracy. No silence hallucinations. Streaming-capable."
+            case .parakeetV3:
+                return
+                    "25 European languages incl. Spanish. Fast on Apple Silicon, auto-detects language. Batch only (no Smart Typing)."
             case .whisper: return "100+ languages including Asian and Arabic. Batch only."
             }
         }
