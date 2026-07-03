@@ -45,9 +45,13 @@ GitHub release whose notes are your CHANGELOG section.
      "Barktor Local Dev".
 
   (Created 2026-07-03, SHA-1 `1841846056E62405608A23561B039513CA3FED83`.
-  Releases up to 0.2.0 were signed as "Purr Local Dev"; the identity was
-  rotated together with the bundle-id change, which already forced the
-  one-time permission re-grant.)
+  This fingerprint identifies the *public* certificate — it is embedded in
+  every signed build and readable with `codesign -dv`, so it is safe to
+  publish and is included here only so you can verify you imported the right
+  cert. The secret is the private key inside the exported `.p12`, which must
+  never be committed. Releases up to 0.2.0 were signed as "Purr Local Dev";
+  the identity was rotated together with the bundle-id change, which already
+  forced the one-time permission re-grant.)
 
 ## After building
 
