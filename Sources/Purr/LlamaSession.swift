@@ -21,6 +21,27 @@ import os.log
 //     call llama_backend_free here - other backends/instances may still
 //     be alive in the same process and backend_init is idempotent
 //     anyway.
+
+// generate() tokenizes with parse_special=true, so a literal
+// "<start_of_turn>" / "<end_of_turn>" inside interpolated content becomes a
+// real control token and breaks out of its chat turn. Every prompt builder
+// must pass untrusted content (dictations, selections, meeting transcripts,
+// user-authored instructions) through neutralize() before splicing it into
+// a template.
+enum GemmaTemplate {
+    static func neutralize(_ text: String) -> String {
+        var out = text
+        while true {
+            let next =
+                out
+                .replacingOccurrences(of: "<start_of_turn>", with: "")
+                .replacingOccurrences(of: "<end_of_turn>", with: "")
+            if next == out { return out }
+            out = next
+        }
+    }
+}
+
 final class LlamaSession {
     enum LlamaError: LocalizedError {
         case modelLoadFailed(path: String)

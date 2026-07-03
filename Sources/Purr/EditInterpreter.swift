@@ -416,14 +416,21 @@ enum EditInterpreter {
 
     // Gemma takes the role, format, and request in one user turn wrapped in
     // Gemma 3's chat template — the BOS token is added by the tokenizer,
-    // <end_of_turn> closes the user turn.
+    // <end_of_turn> closes the user turn. Selection and instruction are
+    // untrusted content: neutralize control tokens so neither can close the
+    // turn early (see GemmaTemplate). Trade-off: applyPlan matches spans
+    // against the ORIGINAL selection, so an edit targeting a literal control
+    // token no-ops, and a holistic rewrite drops it - accepted, since text
+    // that carries these tokens must never reach the template intact.
     private static func gemmaPrompt(instruction: String, selection: String) -> String {
         let body = """
             \(systemPrompt)
 
             \(formatSpec)
 
-            \(userPrompt(instruction: instruction, selection: selection))
+            \(userPrompt(
+                instruction: GemmaTemplate.neutralize(instruction),
+                selection: GemmaTemplate.neutralize(selection)))
             """
         return """
             <start_of_turn>user
