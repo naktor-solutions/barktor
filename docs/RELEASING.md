@@ -19,7 +19,7 @@ GitHub release whose notes are your CHANGELOG section.
 ## Prerequisites
 
 - `gh auth login` with push access to `naktor-solutions/barktor`.
-- **The signing identity "Purr Local Dev" in your login keychain.** This is
+- **The signing identity "Barktor Local Dev" in your login keychain.** This is
   the important one:
 
   macOS ties the app's permissions (Accessibility, Input Monitoring,
@@ -28,7 +28,7 @@ GitHub release whose notes are your CHANGELOG section.
   all permissions after updating. Do not create a new certificate; ask a
   teammate who has released before to export theirs:
 
-  1. They open **Keychain Access**, find the "Purr Local Dev" certificate
+  1. They open **Keychain Access**, find the "Barktor Local Dev" certificate
      (with its private key) under *My Certificates*, right-click →
      *Export…* as a password-protected `.p12`, and hand it over securely
      (never commit it).
@@ -37,15 +37,17 @@ GitHub release whose notes are your CHANGELOG section.
 
      ```bash
      security add-trusted-cert -p codeSign \
-       <(security find-certificate -c "Purr Local Dev" -p)
+       <(security find-certificate -c "Barktor Local Dev" -p)
      # re-import with codesign access if signing prompts for a password:
      # security import barktor.p12 -k ~/Library/Keychains/login.keychain-db -T /usr/bin/codesign
      ```
   3. Verify: `security find-identity -p codesigning -v` lists
-     "Purr Local Dev".
+     "Barktor Local Dev".
 
-  (The identity keeps the legacy "Purr" name on purpose - renaming it would
-  mean a new certificate, which is exactly what we're avoiding.)
+  (Created 2026-07-03, SHA-1 `1841846056E62405608A23561B039513CA3FED83`.
+  Releases up to 0.2.0 were signed as "Purr Local Dev"; the identity was
+  rotated together with the bundle-id change, which already forced the
+  one-time permission re-grant.)
 
 ## After building
 

@@ -4,7 +4,7 @@
 # for the version in Resources/Info.plist.
 #
 # This is the no-Apple-Developer-ID path: the app is signed with the local
-# self-signed identity (default "Purr Local Dev") and NOT notarized, so a
+# self-signed identity (default "Barktor Local Dev") and NOT notarized, so a
 # first install needs right-click > Open. In-app updates are frictionless:
 # the updater verifies the .sha256 sidecar (mandatory - it refuses to install
 # without one) and strips quarantine after its codesign gate. Signing with
@@ -19,7 +19,7 @@ set -euo pipefail
 REPO_ROOT=$(git rev-parse --show-toplevel)
 cd "$REPO_ROOT"
 
-SIGN_ID=${SIGN_ID:-"Purr Local Dev"}
+SIGN_ID=${SIGN_ID:-"Barktor Local Dev"}
 # Pin gh to origin's repo: with an upstream remote configured, gh otherwise
 # resolves ambiguously and can try to publish the release on the fork parent.
 REPO_SLUG=$(git remote get-url origin | sed -E 's#^(git@github.com:|https://github.com/)##; s#\.git$##')
