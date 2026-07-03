@@ -46,6 +46,7 @@ final class SettingsStore: ObservableObject {
         static let meetingsFolderPath = "meetings.folderPath"
         static let systemAudioNoticeShown = "meetings.systemAudioNoticeShown"
         static let historyAudioRetention = "history.audioRetention"
+        static let showHistoryOriginals = "history.showOriginals"
         static let llmPostProcessLevel = "postprocess.llmLevel"
         static let llmCustomInstructions = "postprocess.customInstructions"
         static let soundCues = "sound.cues"
@@ -289,6 +290,12 @@ final class SettingsStore: ObservableObject {
         didSet { defaults.set(historyAudioRetention.rawValue, forKey: Keys.historyAudioRetention) }
     }
 
+    // Reveal the raw transcript + red-strikethrough diff in history rows that
+    // the LLM post-processed. Off by default to keep the list compact.
+    @Published var showHistoryOriginals: Bool {
+        didSet { defaults.set(showHistoryOriginals, forKey: Keys.showHistoryOriginals) }
+    }
+
     // Optional LLM cleanup/rewrite of batch dictations. Off preserves the
     // deterministic-only pipeline byte for byte; Smart Typing streams are
     // never LLM-processed (the text is already typed sentence by sentence).
@@ -458,6 +465,7 @@ final class SettingsStore: ObservableObject {
         let storedRetention =
             defaults.string(forKey: Keys.historyAudioRetention) ?? AudioRetention.week.rawValue
         self.historyAudioRetention = AudioRetention(rawValue: storedRetention) ?? .week
+        self.showHistoryOriginals = defaults.bool(forKey: Keys.showHistoryOriginals)
         let storedLLMLevel =
             defaults.string(forKey: Keys.llmPostProcessLevel) ?? LLMPostProcessLevel.off.rawValue
         self.llmPostProcessLevel = LLMPostProcessLevel(rawValue: storedLLMLevel) ?? .off

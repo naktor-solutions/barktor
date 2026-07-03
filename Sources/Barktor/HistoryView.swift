@@ -34,6 +34,7 @@ struct HistoryView: View {
                             let hasAudio = store.audioURL(for: entry) != nil
                             HistoryRow(
                                 entry: entry,
+                                showOriginals: settings.showHistoryOriginals,
                                 isRetrying: store.retryingEntryIDs.contains(entry.id),
                                 canRetry: hasAudio && store.retryingEntryIDs.isEmpty, // One retry at a time: each Whisper retry loads its own model instance.
                                 canExport: hasAudio,
@@ -83,6 +84,8 @@ struct HistoryView: View {
             .onChange(of: settings.historyAudioRetention) {
                 store.sweepExpiredAudio()
             }
+            Toggle("Show originals", isOn: $settings.showHistoryOriginals)
+                .help("Show the raw transcript and a red-strikethrough diff for AI-polished dictations.")
             Spacer()
             Button("Delete All History", role: .destructive) {
                 showDeleteAllConfirmation = true
@@ -124,6 +127,7 @@ struct HistoryView: View {
 
 private struct HistoryRow: View {
     let entry: DictationEntry
+    let showOriginals: Bool
     let isRetrying: Bool
     let canRetry: Bool
     let canExport: Bool
@@ -132,7 +136,6 @@ private struct HistoryRow: View {
     let onExport: () -> Void
     let onDelete: () -> Void
 
-    @State private var showRaw = false
     @State private var showDeleteConfirmation = false
     @State private var isHovered = false
     @State private var justCopied = false
@@ -141,13 +144,11 @@ private struct HistoryRow: View {
         entry.status == .failed || entry.status == .interrupted
     }
 
-    private var shownText: String? { showRaw ? entry.rawText : entry.displayText }
-
     // Actions appear on hover to keep rows quiet, but a cluster that is "in
-    // use" - a retry spinner, an open delete dialog, an active Raw toggle -
-    // must not vanish when the pointer wanders off the row.
+    // use" - a retry spinner, an open delete dialog - must not vanish when
+    // the pointer wanders off the row.
     private var showsActions: Bool {
-        isHovered || isRetrying || showDeleteConfirmation || showRaw
+        isHovered || isRetrying || showDeleteConfirmation
     }
 
     var body: some View {
@@ -164,12 +165,17 @@ private struct HistoryRow: View {
                     .font(.caption).foregroundStyle(.secondary)
                     .lineLimit(1)
                 Spacer()
-                actions.opacity(showsActions ? 1 : 0)
+                if justCopied && !isRetrying {
+                    copiedBadge
+                } else {
+                    actions.opacity(showsActions ? 1 : 0)
+                }
             }
-            if let text = shownText, !text.isEmpty {
+            if hasRawVariant && showOriginals {
+                beforeAfter
+            } else if let text = entry.displayText, !text.isEmpty {
                 Text(text)
                     .lineLimit(3)
-                    .textSelection(.enabled)
             } else if let message = entry.errorMessage {
                 Text(message).foregroundStyle(.orange).font(.callout)
             } else if canExport {
@@ -194,8 +200,79 @@ private struct HistoryRow: View {
                     .frame(width: 3)
             }
         }
+        // Whole card is a copy target - no aiming at the tiny copy button.
+        // contentShape makes the padding/background hittable; textSelection
+        // is disabled so the tap wins over the window-level text selection
+        // even when the pointer lands on the transcript text itself.
+        .contentShape(Rectangle())
+        .textSelection(.disabled)
+        .onTapGesture { performCopy() }
         .onHover { isHovered = $0 }
         .animation(.easeOut(duration: 0.12), value: isHovered)
+    }
+
+    private var copiedBadge: some View {
+        Label("Copied", systemImage: "checkmark")
+            .font(.caption).fontWeight(.medium).foregroundStyle(.green)
+    }
+
+    // When AI post-processing changed the text, show both: the raw
+    // transcription (before) with the words the LLM dropped/replaced struck
+    // through in red, above the polished result (after) - a lightweight diff,
+    // no toggle.
+    private var beforeAfter: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 2) {
+                sectionTag("Original")
+                originalDiff.font(.callout)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                sectionTag("AI polished")
+                Text(entry.processedText ?? "")
+            }
+        }
+    }
+
+    // Word-level diff via the stdlib's CollectionDifference: words present in
+    // the raw transcript but not in the polished text are struck through in
+    // red so the change is visible at a glance. Transcripts are short, so the
+    // O(n·m) diff is negligible.
+    private var originalDiff: Text {
+        let rawWords = (entry.rawText ?? "").split(whereSeparator: \.isWhitespace)
+        let procWords = (entry.processedText ?? "").split(whereSeparator: \.isWhitespace)
+        // Compare on normalized tokens (lowercased, no surrounding punctuation)
+        // so pure capitalization/punctuation edits don't light up as changes -
+        // only real word drops/replacements get struck.
+        func norm(_ w: Substring) -> String {
+            w.lowercased().trimmingCharacters(in: .punctuationCharacters)
+        }
+        var removed = Set<Int>()
+        for case let .remove(offset, _, _) in procWords.map(norm).difference(from: rawWords.map(norm)).removals {
+            removed.insert(offset)
+        }
+        var out = Text("")
+        for (i, word) in rawWords.enumerated() {
+            let piece: Text = removed.contains(i)
+                ? Text(String(word)).foregroundStyle(.red).strikethrough()
+                : Text(String(word)).foregroundStyle(.secondary)
+            out = i == 0 ? piece : out + Text(" ") + piece
+        }
+        return out
+    }
+
+    private func sectionTag(_ text: String) -> some View {
+        Text(text.uppercased())
+            .font(.caption2).fontWeight(.semibold).foregroundStyle(.tertiary)
+    }
+
+    private func performCopy() {
+        guard let text = entry.displayText, !text.isEmpty else { return }
+        onCopy(text)
+        justCopied = true
+        Task {
+            try? await Task.sleep(for: .seconds(1))
+            justCopied = false
+        }
     }
 
     private var metaDot: some View {
@@ -243,18 +320,12 @@ private struct HistoryRow: View {
                 ProgressView().controlSize(.small)
             } else {
                 Button {
-                    guard let text = shownText, !text.isEmpty else { return }
-                    onCopy(text)
-                    justCopied = true
-                    Task {
-                        try? await Task.sleep(for: .seconds(1))
-                        justCopied = false
-                    }
+                    performCopy()
                 } label: {
                     Image(systemName: justCopied ? "checkmark" : "doc.on.doc")
                 }
                 .help("Copy text")
-                .disabled(shownText?.isEmpty != false)
+                .disabled(entry.displayText?.isEmpty != false)
                 Menu {
                     if canRetry {
                         Menu("Retry transcript") {
@@ -262,9 +333,6 @@ private struct HistoryRow: View {
                                 Button(engine.label) { onRetry(engine) }
                             }
                         }
-                    }
-                    if hasRawVariant {
-                        Toggle("Show raw transcription", isOn: $showRaw)
                     }
                     Button("Export audio as WAV…", action: onExport)
                         .disabled(!canExport)
