@@ -8,9 +8,11 @@ import UniformTypeIdentifiers
 struct HistoryView: View {
     @ObservedObject private var store = HistoryStore.shared
     @ObservedObject private var settings = SettingsStore.shared
+    @ObservedObject private var queue = TranscriptionQueue.shared
     let coordinator: AppCoordinator
 
     @State private var showDeleteAllConfirmation = false
+    @State private var isDropTargeted = false
 
     init(coordinator: AppCoordinator) {
         self.coordinator = coordinator
@@ -22,7 +24,7 @@ struct HistoryView: View {
             Divider()
             if store.entries.isEmpty {
                 Spacer()
-                Text("No dictations yet. Hold your hotkey and speak - every dictation lands here.")
+                Text("No dictations yet. Hold your hotkey and speak - every dictation lands here. You can also drop audio files to transcribe them.")
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .padding()
@@ -35,7 +37,8 @@ struct HistoryView: View {
                             HistoryRow(
                                 entry: entry,
                                 showOriginals: settings.showHistoryOriginals,
-                                isRetrying: store.retryingEntryIDs.contains(entry.id),
+                                isRetrying: store.retryingEntryIDs.contains(entry.id)
+                                    || queue.activeEntryIDs.contains(entry.id),
                                 canRetry: hasAudio && store.retryingEntryIDs.isEmpty, // One retry at a time: each Whisper retry loads its own model instance.
                                 canExport: hasAudio,
                                 onCopy: { copy($0) },
@@ -52,6 +55,38 @@ struct HistoryView: View {
             footer
         }
         .frame(minWidth: 480, minHeight: 420)
+        .dropDestination(for: URL.self) { urls, _ in
+            let audio = Self.audioURLs(from: urls)
+            guard !audio.isEmpty else { return false }
+            Task { await coordinator.importAudioFiles(audio) }
+            return true
+        } isTargeted: { isDropTargeted = $0 }
+        .overlay {
+            if isDropTargeted {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(Color.accentColor.opacity(0.12))
+                    RoundedRectangle(cornerRadius: 10)
+                        .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [8]))
+                    Label("Drop audio files to transcribe", systemImage: "waveform.badge.plus")
+                        .font(.title3)
+                        .padding(12)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                }
+                .padding(8)
+                .allowsHitTesting(false)
+            }
+        }
+    }
+
+    // The testable half of the drop: keep only files whose type conforms to
+    // audio. Video containers (.mp4/.mov) are out of scope — their audio
+    // track would need AVAsset extraction, not AVAudioFile.
+    static func audioURLs(from urls: [URL]) -> [URL] {
+        urls.filter { url in
+            guard let type = UTType(filenameExtension: url.pathExtension) else { return false }
+            return type.conforms(to: .audio)
+        }
     }
 
     private var statsHeader: some View {
@@ -164,6 +199,12 @@ private struct HistoryRow: View {
                 Text(engineDisplayName)
                     .font(.caption).foregroundStyle(.secondary)
                     .lineLimit(1)
+                if let source = entry.sourceFilename {
+                    metaDot
+                    Text(source)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle)
+                }
                 Spacer()
                 if justCopied && !isRetrying {
                     copiedBadge
@@ -176,6 +217,10 @@ private struct HistoryRow: View {
             } else if let text = entry.displayText, !text.isEmpty {
                 Text(text)
                     .lineLimit(3)
+            } else if entry.status == .queued {
+                Text("Waiting to transcribe…").foregroundStyle(.secondary).font(.callout)
+            } else if entry.status == .transcribing {
+                Text("Transcribing…").foregroundStyle(.secondary).font(.callout)
             } else if let message = entry.errorMessage {
                 Text(message).foregroundStyle(.orange).font(.callout)
             } else if canExport {
