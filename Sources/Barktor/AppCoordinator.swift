@@ -1421,6 +1421,16 @@ final class AppCoordinator: ObservableObject {
             let filename = url.lastPathComponent
             let engineChoice = SettingsStore.shared.meetingEngine
             let model = SettingsStore.shared.modelName
+            // The .queued row lands before decode even starts (duration 0,
+            // filled in below) — a long decode (podcast-length files) would
+            // otherwise give zero visible feedback in History while it runs.
+            HistoryStore.shared.add(
+                DictationEntry(
+                    id: entryID, date: Date(), duration: 0, rawText: nil,
+                    processedText: nil,
+                    engineUsed: Self.engineUsedLabel(engine: engineChoice, modelName: model),
+                    mode: .batch, status: .queued, errorMessage: nil, audioFilename: nil,
+                    sourceFilename: filename))
             do {
                 let samples = try await Task.detached(priority: .utility) {
                     try AudioFileDecoder.decode16kMono(url: url)
@@ -1433,13 +1443,7 @@ final class AppCoordinator: ObservableObject {
                     try WAVFile.write(
                         samples: samples, to: jobDir.appendingPathComponent("audio.wav"))
                 }.value
-                HistoryStore.shared.add(
-                    DictationEntry(
-                        id: entryID, date: Date(), duration: duration, rawText: nil,
-                        processedText: nil,
-                        engineUsed: Self.engineUsedLabel(engine: engineChoice, modelName: model),
-                        mode: .batch, status: .queued, errorMessage: nil, audioFilename: nil,
-                        sourceFilename: filename))
+                HistoryStore.shared.update(entryID) { $0.duration = duration }
                 try queue.enqueueFile(
                     jobID: jobID, entryID: entryID, sourceFilename: filename,
                     duration: duration, engine: engineChoice, whisperModel: model,
@@ -1448,27 +1452,15 @@ final class AppCoordinator: ObservableObject {
                 log.error(
                     "Audio import failed for \(filename, privacy: .public): \(error.localizedDescription, privacy: .public)"
                 )
-                // enqueueFile can throw after the .queued entry above was already
-                // added — add()-ing a second entry under the same entryID here
-                // would leave that .queued row an unreachable zombie sharing one
-                // UUID with this failure. Update it in place instead, and only
-                // add a fresh .failed row when nothing was added yet (decode or
-                // WAV-write failures, which precede the add).
+                // The .queued entry above was added before decode started, so
+                // it always exists here (unless the user deleted it out from
+                // under us mid-decode, in which case update() is a harmless
+                // no-op) — update it in place rather than adding a second row
+                // under the same id.
                 try? FileManager.default.removeItem(at: queue.jobDirectory(jobID))
-                if HistoryStore.shared.entries.contains(where: { $0.id == entryID }) {
-                    HistoryStore.shared.update(entryID) {
-                        $0.status = .failed
-                        $0.errorMessage = error.localizedDescription
-                    }
-                } else {
-                    // A failed decode still leaves a visible, explainable row.
-                    HistoryStore.shared.add(
-                        DictationEntry(
-                            id: entryID, date: Date(), duration: 0, rawText: nil,
-                            processedText: nil,
-                            engineUsed: Self.engineUsedLabel(engine: engineChoice, modelName: model),
-                            mode: .batch, status: .failed, errorMessage: error.localizedDescription,
-                            audioFilename: nil, sourceFilename: filename))
+                HistoryStore.shared.update(entryID) {
+                    $0.status = .failed
+                    $0.errorMessage = error.localizedDescription
                 }
             }
         }

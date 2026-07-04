@@ -39,7 +39,7 @@ struct HistoryView: View {
                                 showOriginals: settings.showHistoryOriginals,
                                 isRetrying: store.retryingEntryIDs.contains(entry.id)
                                     || queue.activeEntryIDs.contains(entry.id),
-                                canRetry: hasAudio && store.retryingEntryIDs.isEmpty, // One retry at a time: each Whisper retry loads its own model instance.
+                                canRetry: hasAudio && store.retryingEntryIDs.isEmpty, // Retries funnel through the serial TranscriptionQueue; this gate only prevents double-enqueuing the same entry.
                                 canExport: hasAudio,
                                 onCopy: { copy($0) },
                                 onRetry: { engine in retry(entry, engine: engine) },

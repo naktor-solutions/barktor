@@ -17,7 +17,11 @@ struct DictationEntry: Codable, Identifiable, Equatable {
     }
     let id: UUID
     let date: Date
-    let duration: TimeInterval
+    // var, not let: a dropped file's placeholder .queued row is created with
+    // duration 0 before decode runs (so the row shows up immediately), then
+    // updated to the real value once decode finishes. See
+    // AppCoordinator.importAudioFiles.
+    var duration: TimeInterval
     var rawText: String?
     var processedText: String?
     var engineUsed: String  // "parakeet" | "parakeet-v3" | "nemotron" | "whisper:<model>"
