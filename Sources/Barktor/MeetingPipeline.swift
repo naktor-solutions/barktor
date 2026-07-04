@@ -47,6 +47,10 @@ final class MeetingPipeline: ObservableObject {
 
     private let log = Logger(subsystem: "com.naktor.barktor", category: "meeting")
 
+    // A second stop() while the first is persisting would re-stop the idle
+    // recorder and race the state writes — one stop at a time.
+    private var stopInFlight = false
+
     init(hud: RecordingHUD, queue: TranscriptionQueue) {
         self.hud = hud
         self.queue = queue
@@ -143,11 +147,22 @@ final class MeetingPipeline: ObservableObject {
     }
 
     // Stop is now persist-and-enqueue: the WAVs land in the queue's job
-    // directory (crash-safe), the pipeline returns to .idle immediately —
-    // a new meeting can start while the previous one transcribes — and the
-    // queue owns everything that used to run inline here (echo cancel,
-    // diarization, ASR, document, summary).
+    // directory (crash-safe), the pipeline returns to .idle immediately once
+    // that persist finishes — a new meeting can start while the previous one
+    // transcribes — and the queue owns everything that used to run inline
+    // here (echo cancel, diarization, ASR, document, summary).
+    //
+    // Ordering matters: `state` stays `.recording` through the multi-second
+    // WAV write and only drops to `.idle` once enqueueMeeting() returns (or
+    // fails). canQuitSafely() reads `state`, so this is what keeps quit
+    // blocked while the audio is still landing on disk — flipping to `.idle`
+    // first would let a quit during that window kill the write and lose the
+    // recording, since the half-written job dir (no job.json yet) is deleted
+    // by the next launch's scan.
     private func stop() async {
+        guard !stopInFlight else { return }
+        stopInFlight = true
+        defer { stopInFlight = false }
         elapsedTimer?.invalidate()
         elapsedTimer = nil
         levelTask?.cancel()
@@ -165,12 +180,12 @@ final class MeetingPipeline: ObservableObject {
             hud.hide()
             return
         }
-        state = .idle
         do {
             try await queue.enqueueMeeting(
                 mic: samples, system: systemCaptureResult.samples, recordedAt: Date(),
                 engine: SettingsStore.shared.meetingEngine,
                 whisperModel: SettingsStore.shared.modelName)
+            state = .idle
             hud.showMessage("Transcribing in the background…", autoHideAfter: 3)
         } catch {
             // Disk full or unwritable queue dir: salvage straight to the
@@ -184,6 +199,7 @@ final class MeetingPipeline: ObservableObject {
                     ? "Couldn't queue the transcription — audio saved to your Meetings folder."
                     : "Couldn't save the meeting audio. Check free disk space.",
                 autoHideAfter: 5)
+            state = .idle
         }
         maybeShowSystemAudioNotice(silentButActive: systemCaptureResult.silentButActive)
     }
