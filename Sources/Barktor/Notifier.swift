@@ -88,13 +88,15 @@ final class Notifier: NSObject, Notifying, UNUserNotificationCenterDelegate {
     }
 
     // Banners must show even while a Barktor window is frontmost (Settings /
-    // History count as foreground for a menu-bar app).
+    // History count as foreground for a menu-bar app). Also list it in
+    // Notification Center: a background transcription can finish while the
+    // user is away from their Mac, and a transient banner alone can be missed.
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler:
             @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        completionHandler([.banner, .sound])
+        completionHandler([.banner, .list, .sound])
     }
 }

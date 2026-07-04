@@ -8,6 +8,7 @@ import Combine
 final class MenuBarController {
     private let statusItem: NSStatusItem
     private var stateCancellable: AnyCancellable?
+    private let queue: TranscriptionQueue
 
     private let onShowAbout: () -> Void
     private let onShowSettings: () -> Void
@@ -24,15 +25,29 @@ final class MenuBarController {
     // long-running and error is persistent, so both earn a distinct glance.
     private lazy var iconMeeting = templateComposite(["mic.fill", "record.circle.fill"])
     private lazy var iconError = templateSymbol(named: "exclamationmark.triangle")
+    // Queue processing runs for minutes with nothing else on screen — worth
+    // a glyph, unlike the seconds-long dictation transcribe.
+    private lazy var iconQueue = templateComposite(["mic", "waveform"])
+
+    private var queueCancellable: AnyCancellable?
+    private let queueItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private let queueSeparator = NSMenuItem.separator()
+    // NSMenu tracking runs the main loop in event-tracking mode, where
+    // Combine's default scheduling stalls — a .common-modes timer keeps the
+    // progress line moving while the menu is open (same trick as the
+    // meeting pill's elapsed timer).
+    private var queueTimer: Timer?
 
     init(
         coordinator: AppCoordinator,
+        queue: TranscriptionQueue,
         onShowAbout: @escaping () -> Void,
         onShowSettings: @escaping () -> Void,
         onShowHistory: @escaping () -> Void,
         onShowOnboarding: @escaping () -> Void,
         onQuit: @escaping () -> Void
     ) {
+        self.queue = queue
         self.onShowAbout = onShowAbout
         self.onShowSettings = onShowSettings
         self.onShowHistory = onShowHistory
@@ -48,6 +63,9 @@ final class MenuBarController {
         stateCancellable = coordinator.$menuBarStatus.sink { [weak self] status in
             self?.applyStatus(status)
         }
+        queueCancellable = queue.$state.sink { [weak self] state in
+            self?.applyQueueState(state)
+        }
     }
 
     private func configureButton() {
@@ -58,6 +76,12 @@ final class MenuBarController {
 
     private func rebuildMenu() {
         let menu = NSMenu()
+
+        queueItem.isEnabled = false
+        queueItem.isHidden = true
+        queueSeparator.isHidden = true
+        menu.addItem(queueItem)
+        menu.addItem(queueSeparator)
 
         menu.addItem(menuItem(title: "About Barktor", selector: #selector(triggerAbout)))
         menu.addItem(.separator())
@@ -120,10 +144,56 @@ final class MenuBarController {
         case .meeting:
             button.image = iconMeeting
             button.toolTip = "Barktor - recording meeting…"
+        case .queueProcessing:
+            button.image = iconQueue
+            button.toolTip = "Barktor - transcribing in background…"
         case .error(let message):
             button.image = iconError
             button.toolTip = "Barktor - \(message)"
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Queue progress item
+    // ------------------------------------------------------------------
+
+    private func applyQueueState(_ state: TranscriptionQueue.QueueState) {
+        switch state {
+        case .idle:
+            queueItem.isHidden = true
+            queueSeparator.isHidden = true
+            queueTimer?.invalidate()
+            queueTimer = nil
+        case .processing:
+            queueItem.title = Self.queueTitle(state) ?? ""
+            queueItem.isHidden = false
+            queueSeparator.isHidden = false
+            startQueueTimerIfNeeded()
+        }
+    }
+
+    private func startQueueTimerIfNeeded() {
+        guard queueTimer == nil else { return }
+        let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if let title = Self.queueTitle(self.queue.state) {
+                    self.queueItem.title = title
+                }
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        queueTimer = timer
+    }
+
+    // "Transcribing Meeting (42 min) — 43%  (2 queued)"
+    static func queueTitle(_ state: TranscriptionQueue.QueueState) -> String? {
+        guard case .processing(let label, let stage, let fraction, let queued) = state
+        else { return nil }
+        var text = "\(stage) \(label)"
+        if let fraction { text += " — \(Int(fraction * 100))%" }
+        if queued > 0 { text += "  (\(queued) queued)" }
+        return text
     }
 
     private func templateSymbol(named name: String) -> NSImage? {

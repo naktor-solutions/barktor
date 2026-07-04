@@ -40,6 +40,7 @@ final class AppCoordinator: ObservableObject {
         case recording
         case transcribing
         case meeting
+        case queueProcessing
         case error(String)
     }
 
@@ -141,6 +142,10 @@ final class AppCoordinator: ObservableObject {
     private var voiceEditor: VoiceEditor!
     private var meetingObserver: AnyCancellable?
     private var voiceEditObserver: AnyCancellable?
+    private var queueObserver: AnyCancellable?
+    // True while the queue is processing or has jobs waiting; feeds the
+    // menu-bar glyph when nothing foreground is active.
+    private var queueActive = false
 
     // Recordings shorter than this are accidental taps - not worth an entry.
     private static let minKeepSamples = 16_000 * 4 / 10
@@ -266,6 +271,46 @@ final class AppCoordinator: ObservableObject {
         installHotkeys()
         // Eager warmup so the first press doesn't pay model-load cost.
         Task { await engine.warmup() }
+
+        // Background transcription queue: the coordinator supplies real
+        // engines and pipelines; the queue never touches globals itself.
+        let queue = TranscriptionQueue.shared
+        queue.engineResolver = { [weak self] choice, model in
+            switch choice {
+            case .parakeet:
+                return (self?.parakeet ?? ParakeetEngine(), "Parakeet TDT v2")
+            case .parakeetV3:
+                return (self?.parakeetV3 ?? ParakeetEngine(version: .v3), "Parakeet TDT v3")
+            case .nemotron:
+                return (self?.nemotron ?? NemotronStreamingEngine(), "Multilingual (Nemotron)")
+            case .whisper:
+                // ALWAYS a fresh pipe: the live dictation engine must never
+                // share WhisperKit decoder state with a queue job.
+                return (WhisperEngine(modelName: model), "Whisper (\(model))")
+            }
+        }
+        queue.postProcess = { [weak self] raw, duration in
+            guard let self else { return raw }
+            let processed = self.makePostProcessor().apply(raw).text
+            // LLM polish only for dictation-sized audio; on an hour-long
+            // file it would just burn its 15 s watchdog for nothing.
+            guard duration <= 300 else { return processed }
+            return await LLMPostProcessor.polish(processed)
+        }
+        queue.diarize = { [weak self] samples in
+            guard let self else { return [] }
+            return try await self.diarizer.diarize(samples: samples)
+        }
+        queue.summarize = { url in
+            guard SettingsStore.shared.summarizeMeetings, MeetingSummarizer.canSummarizeNow
+            else { return nil }
+            return try? await MeetingSummarizer.shared.summarize(transcriptURL: url)
+        }
+        queueObserver = queue.$state.sink { [weak self] state in
+            self?.queueActive = state != .idle
+            self?.refreshMenuBarStatus()
+        }
+        queue.scanAndResume()
     }
 
     func reloadEngine() {
@@ -622,7 +667,7 @@ final class AppCoordinator: ObservableObject {
             switch voiceEditState {
             case .transcribing: return .transcribing
             case .recording: return .recording
-            case .idle: return .idle
+            case .idle: return queueActive ? .queueProcessing : .idle
             }
         }
     }

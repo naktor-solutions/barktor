@@ -13,11 +13,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var historyWindow: NSWindow?
     private var aboutWindow: NSWindow?
     private let updater = Updater()
+    // Built in applicationDidFinishLaunching (not a property initializer):
+    // Notifier is @MainActor-isolated, and AppDelegate itself isn't - the
+    // same reason coordinator/menuBar above are implicitly-unwrapped rather
+    // than given default values.
+    private var notifier: Notifier!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         coordinator = AppCoordinator()
         menuBar = MenuBarController(
             coordinator: coordinator,
+            queue: TranscriptionQueue.shared,
             onShowAbout: { [weak self] in self?.showAbout() },
             onShowSettings: { [weak self] in self?.showSettings() },
             onShowHistory: { [weak self] in self?.showHistory() },
@@ -35,6 +41,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         coordinator.setMenuActions(
             quit: { NSApp.terminate(nil) }
         )
+
+        // Wired before start(): the startup scan can complete queued jobs
+        // immediately, and their notifications need the real notifier.
+        notifier = Notifier()
+        notifier.onOpenHistory = { [weak self] in self?.showHistory() }
+        TranscriptionQueue.shared.notifier = notifier
 
         coordinator.start()
 
