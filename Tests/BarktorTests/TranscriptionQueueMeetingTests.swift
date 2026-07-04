@@ -94,11 +94,44 @@ struct TranscriptionQueueMeetingTests {
             engine: .parakeet, whisperModel: "")
         await queue.waitUntilIdle()
         #expect(notifier.failures.count == 1)
+        #expect(notifier.failures.first?.opensHistory == false)
         let salvaged = try #require(notifier.failures.first?.revealURL)
         #expect(FileManager.default.fileExists(atPath: salvaged.path))
         #expect(salvaged.lastPathComponent.contains("(audio only)"))
         // Both tracks salvaged; the job dir is gone.
         let names = try FileManager.default.contentsOfDirectory(atPath: salvaged.deletingLastPathComponent().path)
         #expect(names.contains { $0.contains("(audio only, system)") })
+    }
+
+    // Fix B: when even the salvage fails (disk trouble — modeled here by
+    // pointing salvageDirectory at a path that can't be a directory), the job
+    // dir must NOT be deleted — it holds the only copy of the recording — and
+    // the failure notification must not claim audio was saved anywhere.
+    @Test func failedSalvageKeepsJobDirAndNotifiesWithNoRevealURL() async throws {
+        let (queue, engine, notifier, dir) = makeWorld()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        engine.shouldThrow = true
+        // A regular file at this path means FileManager.createDirectory(at:)
+        // fails with "file exists" — salvageMeetingAudio's first step.
+        let blocker = dir.appendingPathComponent("blocker-not-a-directory")
+        try FileManager.default.createDirectory(
+            at: dir, withIntermediateDirectories: true)
+        try Data().write(to: blocker)
+        queue.salvageDirectory = { blocker }
+        try await queue.enqueueMeeting(
+            mic: [Float](repeating: 0.2, count: 16_000 * 3), system: [],
+            recordedAt: Date(timeIntervalSince1970: 1_800_000_000),
+            engine: .parakeet, whisperModel: "")
+        // Only one job was ever enqueued in this queue instance, so its
+        // directory is the sole entry under queue.directory.
+        let jobDirs = try FileManager.default.contentsOfDirectory(
+            at: queue.directory, includingPropertiesForKeys: nil)
+        let jobDir = try #require(jobDirs.first)
+        await queue.waitUntilIdle()
+        #expect(notifier.failures.count == 1)
+        #expect(notifier.failures.first?.revealURL == nil)
+        // The job dir (and its mic.wav) survives — it's the only copy, and
+        // the next launch's scanAndResume() will retry the whole job.
+        #expect(FileManager.default.fileExists(atPath: jobDir.appendingPathComponent("mic.wav").path))
     }
 }

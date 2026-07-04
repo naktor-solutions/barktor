@@ -13,12 +13,15 @@ final class FakeEngine: TranscriptionEngine {
     var shouldThrow = false
     var delay: Duration = .zero
     var progressSteps: [Double] = []
+    // Configurable so tests can exercise the "Warming up" → "Transcribing"
+    // stage transition (Fix E) without a real cold engine.
+    var warm = true
     private(set) var calls = 0
     private var inFlight = 0
     private(set) var maxInFlight = 0
 
     func warmup() async {}
-    func isWarm() async -> Bool { true }
+    func isWarm() async -> Bool { warm }
 
     func transcribe(samples: [Float]) async throws -> String {
         inFlight += 1
@@ -60,15 +63,15 @@ final class SpyNotifier: Notifying {
     private(set) var permissionRequests = 0
     private(set) var meetingDone: [(title: String, revealURL: URL)] = []
     private(set) var fileDone: [String] = []
-    private(set) var failures: [(message: String, revealURL: URL?)] = []
+    private(set) var failures: [(message: String, revealURL: URL?, opensHistory: Bool)] = []
 
     func requestPermissionIfNeeded() { permissionRequests += 1 }
     func notifyMeetingDone(title: String, revealURL: URL) {
         meetingDone.append((title, revealURL))
     }
     func notifyFileDone(filename: String) { fileDone.append(filename) }
-    func notifyFailure(message: String, revealURL: URL?) {
-        failures.append((message, revealURL))
+    func notifyFailure(message: String, revealURL: URL?, opensHistory: Bool) {
+        failures.append((message, revealURL, opensHistory))
     }
 }
 
@@ -192,6 +195,8 @@ struct TranscriptionQueueTests {
         // Audio still adopted so Retry stays possible after a failure.
         #expect(updated?.audioFilename != nil)
         #expect(notifier.failures.count == 1)
+        // A failed drop's natural landing spot is its .failed row in History.
+        #expect(notifier.failures.first?.opensHistory == true)
         #expect(!FileManager.default.fileExists(atPath: queue.jobDirectory(jobID).path))
     }
 
@@ -324,5 +329,57 @@ struct TranscriptionQueueTests {
         await queue.waitUntilIdle()
         #expect(fractions.contains(0.5))
         #expect(queue.state == .idle)
+    }
+
+    // Fix E: a cold engine should show "Warming up" until its first real
+    // progress signal, then flip to "Transcribing" — never a misleading
+    // "Transcribing" while the model is still loading.
+    @Test func coldEngineWarmsUpThenTranscribes() async throws {
+        let (queue, history, engine, _, dir) = makeWorld()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        engine.warm = false
+        engine.progressSteps = [0.5]
+        engine.delay = .milliseconds(30)
+        var stages: [String] = []
+        let cancellable = queue.$state.sink { state in
+            if case .processing(_, let stage, _, _) = state { stages.append(stage) }
+        }
+        defer { cancellable.cancel() }
+        let entry = queuedEntry(history)
+        let jobID = UUID()
+        try stageAudio(queue, jobID: jobID)
+        try queue.enqueueFile(
+            jobID: jobID, entryID: entry.id, sourceFilename: "f.wav", duration: 1,
+            engine: .parakeet, whisperModel: "", isRetry: false)
+        await queue.waitUntilIdle()
+        let warmingUpIndex = stages.firstIndex(of: "Warming up")
+        let transcribingIndex = stages.lastIndex(of: "Transcribing")
+        #expect(warmingUpIndex != nil)
+        #expect(transcribingIndex != nil)
+        if let w = warmingUpIndex, let t = transcribingIndex {
+            #expect(w < t)
+        }
+    }
+
+    // Fix F: HistoryStore.deleteAll() mid-job must not resurrect a WAV for an
+    // entry that no longer exists — adoptAudioIntoHistory guards on the entry
+    // still being present.
+    @Test func deleteAllMidJobLeavesNoOrphanWAV() async throws {
+        let (queue, history, engine, _, dir) = makeWorld()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        engine.delay = .milliseconds(30)
+        let entry = queuedEntry(history)
+        let jobID = UUID()
+        try stageAudio(queue, jobID: jobID)
+        try queue.enqueueFile(
+            jobID: jobID, entryID: entry.id, sourceFilename: "drop.m4a", duration: 1,
+            engine: .parakeet, whisperModel: "", isRetry: false)
+        history.deleteAll()
+        await queue.waitUntilIdle()
+        let audioDir = history.audioDirectory
+        let names =
+            (try? FileManager.default.contentsOfDirectory(atPath: audioDir.path)) ?? []
+        #expect(names.isEmpty)
+        #expect(history.entries.isEmpty)
     }
 }

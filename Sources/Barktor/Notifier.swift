@@ -9,7 +9,7 @@ protocol Notifying: AnyObject {
     func requestPermissionIfNeeded()
     func notifyMeetingDone(title: String, revealURL: URL)
     func notifyFileDone(filename: String)
-    func notifyFailure(message: String, revealURL: URL?)
+    func notifyFailure(message: String, revealURL: URL?, opensHistory: Bool)
 }
 
 // Default for an unwired queue (and a safe stand-in anywhere notifications
@@ -19,7 +19,7 @@ final class NullNotifier: Notifying {
     func requestPermissionIfNeeded() {}
     func notifyMeetingDone(title: String, revealURL: URL) {}
     func notifyFileDone(filename: String) {}
-    func notifyFailure(message: String, revealURL: URL?) {}
+    func notifyFailure(message: String, revealURL: URL?, opensHistory: Bool) {}
 }
 
 // The real thing. Permission is requested lazily on the first enqueue —
@@ -53,9 +53,15 @@ final class Notifier: NSObject, Notifying, UNUserNotificationCenterDelegate {
         post(title: "Transcription ready", body: filename, userInfo: ["openHistory": true])
     }
 
-    func notifyFailure(message: String, revealURL: URL?) {
+    func notifyFailure(message: String, revealURL: URL?, opensHistory: Bool) {
         var info: [AnyHashable: Any] = [:]
-        if let revealURL { info["reveal"] = revealURL.path }
+        // revealURL wins if both are set: a concrete file to show beats a
+        // generic "go look at History" landing spot.
+        if let revealURL {
+            info["reveal"] = revealURL.path
+        } else if opensHistory {
+            info["openHistory"] = true
+        }
         post(title: "Transcription failed", body: message, userInfo: info)
     }
 

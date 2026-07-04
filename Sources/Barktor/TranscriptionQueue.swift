@@ -257,8 +257,14 @@ final class TranscriptionQueue: ObservableObject {
                 return AudioPreprocessor.normalize(samples).samples
             }.value
             history.update(payload.entryID) { $0.status = .transcribing }
+            // A cold engine loads (and, for Whisper, ANE-compiles) its model
+            // inside the transcribe() call below, which can take a while on a
+            // first run — show "Warming up" instead of a misleading
+            // "Transcribing" until the first progress callback proves the
+            // engine is actually decoding.
+            setStage(await engine.isWarm() ? "Transcribing" : "Warming up", fraction: nil)
             let raw = try await engine.transcribe(samples: prepared) { [weak self] fraction in
-                Task { @MainActor [weak self] in self?.setFraction(fraction) }
+                Task { @MainActor [weak self] in self?.noteTranscriptionProgress(fraction) }
             }
             let processed = await postProcess(raw, payload.duration)
             history.update(payload.entryID) {
@@ -289,7 +295,8 @@ final class TranscriptionQueue: ObservableObject {
             }
             removeJobDir(job.id)
             notifier.notifyFailure(
-                message: "Could not transcribe \(payload.sourceFilename).", revealURL: nil)
+                message: "Could not transcribe \(payload.sourceFilename).", revealURL: nil,
+                opensHistory: true)
         }
     }
 
@@ -297,6 +304,12 @@ final class TranscriptionQueue: ObservableObject {
     // retention keeps audio; otherwise it dies with the job dir (mirrors how
     // dictations behave under retention "Never").
     private func adoptAudioIntoHistory(from url: URL, entryID: UUID) {
+        // Delete All (or a single delete) can race a job that's still
+        // finishing: the entry is gone but the job keeps running. Without
+        // this guard we'd recreate the audio dir and move the WAV in for an
+        // entry nothing points at any more — an orphan no sweep will ever
+        // find, since sweeps only walk entries.
+        guard history.entries.contains(where: { $0.id == entryID }) else { return }
         guard FileManager.default.fileExists(atPath: url.path) else { return }
         guard history.retentionProvider().maxAge != nil else { return }
         let filename = "\(entryID.uuidString).wav"
@@ -342,10 +355,14 @@ final class TranscriptionQueue: ObservableObject {
             let started = Date()
             let document: MeetingDocument.Output
             if system.isEmpty {
-                setStage("Transcribing", fraction: nil)
+                // A cold engine loads its model inside the transcribeDetailed()
+                // call below, which can take a while on a first run — show
+                // "Warming up" until the first progress callback proves the
+                // engine is actually decoding.
+                setStage(await engine.isWarm() ? "Transcribing" : "Warming up", fraction: nil)
                 let asr = try await engine.transcribeDetailed(samples: mic) {
                     [weak self] fraction in
-                    Task { @MainActor [weak self] in self?.setFraction(fraction) }
+                    Task { @MainActor [weak self] in self?.noteTranscriptionProgress(fraction) }
                 }
                 warnIfMissingTimings(asr, track: "mic")
                 document = MeetingDocument.format(
@@ -361,16 +378,18 @@ final class TranscriptionQueue: ObservableObject {
                 // Two sequential ASR passes share one progress bar, weighted
                 // by how much audio each contributes.
                 let remoteWeight = Double(system.count) / Double(system.count + cleanedMic.count)
-                setStage("Transcribing", fraction: 0)
+                setStage(await engine.isWarm() ? "Transcribing" : "Warming up", fraction: 0)
                 let remoteASR = try await engine.transcribeDetailed(samples: system) {
                     [weak self] fraction in
-                    Task { @MainActor [weak self] in self?.setFraction(fraction * remoteWeight) }
+                    Task { @MainActor [weak self] in
+                        self?.noteTranscriptionProgress(fraction * remoteWeight)
+                    }
                 }
                 warnIfMissingTimings(remoteASR, track: "remote")
                 let localASR = try await engine.transcribeDetailed(samples: cleanedMic) {
                     [weak self] fraction in
                     Task { @MainActor [weak self] in
-                        self?.setFraction(remoteWeight + fraction * (1 - remoteWeight))
+                        self?.noteTranscriptionProgress(remoteWeight + fraction * (1 - remoteWeight))
                     }
                 }
                 warnIfMissingTimings(localASR, track: "local")
@@ -402,11 +421,18 @@ final class TranscriptionQueue: ObservableObject {
             log.error(
                 "Meeting job failed: \(error.localizedDescription, privacy: .public)")
             let salvaged = salvageMeetingAudio(job, payload)
-            removeJobDir(job.id)
-            notifier.notifyFailure(
-                message:
-                    "Meeting transcription failed. The audio was saved to your Meetings folder.",
-                revealURL: salvaged)
+            if salvaged != nil {
+                removeJobDir(job.id)
+                notifier.notifyFailure(
+                    message: "Meeting transcription failed. The audio was saved to your Meetings folder.",
+                    revealURL: salvaged, opensHistory: false)
+            } else {
+                // Salvage failed (disk trouble): the job dir holds the ONLY
+                // copy — keep it, and the next launch retries the whole job.
+                notifier.notifyFailure(
+                    message: "Meeting transcription failed. The recording is kept and will be retried on next launch.",
+                    revealURL: nil, opensHistory: false)
+            }
         }
     }
 
@@ -422,9 +448,15 @@ final class TranscriptionQueue: ObservableObject {
         )
     }
 
-    // Copies the job's WAVs into the Meetings folder so a failed job never
-    // loses the recording. Returns the mic WAV's destination (nil when even
-    // the salvage failed — logged, nothing more we can do).
+    // Moves the job's WAVs into the Meetings folder so a failed job never
+    // loses the recording. A same-volume rename (not a copy) so it still
+    // works under the disk pressure that's the most likely cause of the
+    // failure in the first place. The mic move and the system move are
+    // independent: mic failing means the sources are still intact in the job
+    // dir (return nil, caller keeps the job for retry); the system move
+    // failing after the mic succeeded is vanishingly rare (same volume, same
+    // call) and not worth losing the mic recording over, so we log it and
+    // still return the mic destination.
     private func salvageMeetingAudio(
         _ job: TranscriptionJob, _ payload: TranscriptionJob.MeetingPayload
     ) -> URL? {
@@ -435,23 +467,35 @@ final class TranscriptionQueue: ObservableObject {
         let fm = FileManager.default
         do {
             try fm.createDirectory(at: dir, withIntermediateDirectories: true)
-            let micDest = dir.appendingPathComponent("Meeting \(stamp) (audio only).wav")
-            try? fm.removeItem(at: micDest)
-            try fm.copyItem(
-                at: jobDirectory(job.id).appendingPathComponent("mic.wav"), to: micDest)
-            if payload.hasSystemTrack {
-                let sysDest = dir.appendingPathComponent(
-                    "Meeting \(stamp) (audio only, system).wav")
-                try? fm.removeItem(at: sysDest)
-                try fm.copyItem(
-                    at: jobDirectory(job.id).appendingPathComponent("system.wav"), to: sysDest)
-            }
-            return micDest
         } catch {
             log.error(
                 "Meeting audio salvage failed: \(error.localizedDescription, privacy: .public)")
             return nil
         }
+        let micDest = dir.appendingPathComponent("Meeting \(stamp) (audio only).wav")
+        do {
+            try? fm.removeItem(at: micDest)
+            try fm.moveItem(
+                at: jobDirectory(job.id).appendingPathComponent("mic.wav"), to: micDest)
+        } catch {
+            log.error(
+                "Meeting audio salvage failed (mic): \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+        if payload.hasSystemTrack {
+            let sysDest = dir.appendingPathComponent(
+                "Meeting \(stamp) (audio only, system).wav")
+            do {
+                try? fm.removeItem(at: sysDest)
+                try fm.moveItem(
+                    at: jobDirectory(job.id).appendingPathComponent("system.wav"), to: sysDest)
+            } catch {
+                log.error(
+                    "Meeting audio salvage failed (system, mic still saved): \(error.localizedDescription, privacy: .public)"
+                )
+            }
+        }
+        return micDest
     }
 
     // ------------------------------------------------------------------
@@ -472,6 +516,20 @@ final class TranscriptionQueue: ObservableObject {
         guard case .processing(let label, let stage, _, let queued) = state else { return }
         state = .processing(
             label: label, stage: stage, fraction: min(1, max(0, fraction)), queued: queued)
+    }
+
+    // Shared by every ASR progress closure (file jobs, mic-only meetings,
+    // both passes of dual-track meetings). The engine's first real progress
+    // signal is proof it has finished loading, so that's what flips the
+    // stage from "Warming up" to "Transcribing" — a fixed timer or callback
+    // count would either flip too early (still loading) or too late (stuck
+    // on "Warming up" once decoding is already well underway).
+    private func noteTranscriptionProgress(_ fraction: Double) {
+        if case .processing(_, "Warming up", _, _) = state {
+            setStage("Transcribing", fraction: fraction)
+        } else {
+            setFraction(fraction)
+        }
     }
 
     private func refreshQueuedCount() {
