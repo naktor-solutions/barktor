@@ -1403,13 +1403,28 @@ final class AppCoordinator: ObservableObject {
                 log.error(
                     "Audio import failed for \(filename, privacy: .public): \(error.localizedDescription, privacy: .public)"
                 )
-                // A failed decode still leaves a visible, explainable row.
-                HistoryStore.shared.add(
-                    DictationEntry(
-                        id: entryID, date: Date(), duration: 0, rawText: nil, processedText: nil,
-                        engineUsed: Self.engineUsedLabel(engine: engineChoice, modelName: model),
-                        mode: .batch, status: .failed, errorMessage: error.localizedDescription,
-                        audioFilename: nil, sourceFilename: filename))
+                // enqueueFile can throw after the .queued entry above was already
+                // added — add()-ing a second entry under the same entryID here
+                // would leave that .queued row an unreachable zombie sharing one
+                // UUID with this failure. Update it in place instead, and only
+                // add a fresh .failed row when nothing was added yet (decode or
+                // WAV-write failures, which precede the add).
+                try? FileManager.default.removeItem(at: queue.jobDirectory(jobID))
+                if HistoryStore.shared.entries.contains(where: { $0.id == entryID }) {
+                    HistoryStore.shared.update(entryID) {
+                        $0.status = .failed
+                        $0.errorMessage = error.localizedDescription
+                    }
+                } else {
+                    // A failed decode still leaves a visible, explainable row.
+                    HistoryStore.shared.add(
+                        DictationEntry(
+                            id: entryID, date: Date(), duration: 0, rawText: nil,
+                            processedText: nil,
+                            engineUsed: Self.engineUsedLabel(engine: engineChoice, modelName: model),
+                            mode: .batch, status: .failed, errorMessage: error.localizedDescription,
+                            audioFilename: nil, sourceFilename: filename))
+                }
             }
         }
     }
