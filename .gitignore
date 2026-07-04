@@ -6,7 +6,11 @@ dist/
 *.xcodeproj/
 Package.resolved
 .DS_Store
-.claude/
+# Ignore .claude/ contents but keep the shared project config (hooks) tracked.
+# Note: must be `.claude/*` (not `.claude/`) — git can't re-include a file
+# whose parent directory is excluded.
+.claude/*
+!.claude/settings.json
 
 # App Store Connect API private key (notary credentials) — never commit.
 AuthKey_*.p8

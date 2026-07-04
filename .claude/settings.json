@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // empty' | { read -r f; case \"$f\" in */docs/superpowers/specs/*.md) \"$CLAUDE_PROJECT_DIR/scripts/spec-to-html.sh\" \"$f\";; esac; } 2>/dev/null || true",
+            "timeout": 30,
+            "statusMessage": "Rendering spec to HTML…"
+          }
+        ]
+      }
+    ]
+  }
+}
