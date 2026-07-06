@@ -31,7 +31,14 @@ struct HistoryView: View {
                 Spacer()
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 8) {
+                    // Plain VStack, not LazyVStack: a row can expand its
+                    // transcript in place (HistoryRow.isExpanded). LazyVStack
+                    // caches each row's height, which can leave a grown row's
+                    // slot stale until a sibling interaction forces relayout;
+                    // an eager VStack re-measures the moment a row grows. A
+                    // dictation history is small enough that eager layout
+                    // costs nothing.
+                    VStack(spacing: 8) {
                         ForEach(store.entries) { entry in
                             let hasAudio = store.audioURL(for: entry) != nil
                             HistoryRow(
@@ -174,6 +181,7 @@ private struct HistoryRow: View {
     @State private var showDeleteConfirmation = false
     @State private var isHovered = false
     @State private var justCopied = false
+    @State private var isExpanded = false
 
     private var needsAttention: Bool {
         entry.status == .failed || entry.status == .interrupted
@@ -184,6 +192,19 @@ private struct HistoryRow: View {
     // the pointer wanders off the row.
     private var showsActions: Bool {
         isHovered || isRetrying || showDeleteConfirmation
+    }
+
+    // Long transcripts expand past the 3-line preview. Only plain transcripts
+    // qualify - not the AI before/after diff or the status placeholders. The
+    // whole card is a copy target with text selection disabled (see the card
+    // modifiers below), so tapping the transcript copies rather than expands;
+    // expand/collapse is the dedicated chevron in the meta row. Show it on
+    // hover while collapsed, and always while expanded so a grown row can
+    // always be collapsed again.
+    private var canToggleExpand: Bool {
+        guard !(hasRawVariant && showOriginals),
+              let text = entry.displayText, !text.isEmpty else { return false }
+        return isExpanded || isHovered
     }
 
     var body: some View {
@@ -206,6 +227,18 @@ private struct HistoryRow: View {
                         .lineLimit(1).truncationMode(.middle)
                 }
                 Spacer()
+                if canToggleExpand {
+                    // Expand/collapse toggle for long transcripts. A Button, so
+                    // its tap beats the card-wide copy gesture - the rest of the
+                    // card still copies. Selection stays disabled (card level),
+                    // so this control is the only way to reveal the full text.
+                    Button { isExpanded.toggle() } label: {
+                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .help(isExpanded ? "Collapse" : "Expand")
+                }
                 if justCopied && !isRetrying {
                     copiedBadge
                 } else {
@@ -216,7 +249,7 @@ private struct HistoryRow: View {
                 beforeAfter
             } else if let text = entry.displayText, !text.isEmpty {
                 Text(text)
-                    .lineLimit(3)
+                    .lineLimit(isExpanded ? nil : 3)
             } else if entry.status == .queued {
                 Text("Waiting to transcribe…").foregroundStyle(.secondary).font(.callout)
             } else if entry.status == .transcribing {
