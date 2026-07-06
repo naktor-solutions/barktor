@@ -616,30 +616,40 @@ struct DictationTrigger: Codable, Equatable {
 }
 
 // A hotkey is either:
-//   - bare modifiers (keyCode == nil, modifiers != 0)            e.g. hold Right Option
+//   - bare modifiers (keyCode == nil, modifiers != 0)            e.g. hold Right Option, hold fn
 //   - modifiers + key (both present)                              e.g. ⌃⌥ Space
 //   - bare key (keyCode != nil, modifiers == 0)                   e.g. F5
 struct Hotkey: Equatable, Codable {
     var keyCode: Int64?
     var modifiers: CGEventFlags
+    // For bare-modifier hotkeys, the physical modifier key's device keyCode
+    // (e.g. 59 = Left Control, 62 = Right Control, 63 = fn/globe). It's what lets
+    // us bind the *exact* key the user pressed — left vs right, or fn — instead
+    // of always assuming the right-side key. nil for combos, bare keys, and
+    // hotkeys stored before this field existed, which fall back to the
+    // right-side device code so their meaning doesn't silently change.
+    var deviceKeyCode: Int64?
 
     var isBareModifier: Bool { keyCode == nil && !modifiers.isEmpty }
 
     // CGEventFlags is an OptionSet, not Codable; round-trip it via its rawValue.
-    private enum CodingKeys: String, CodingKey { case keyCode, modifiers }
-    init(keyCode: Int64?, modifiers: CGEventFlags) {
+    private enum CodingKeys: String, CodingKey { case keyCode, modifiers, deviceKeyCode }
+    init(keyCode: Int64?, modifiers: CGEventFlags, deviceKeyCode: Int64? = nil) {
         self.keyCode = keyCode
         self.modifiers = modifiers
+        self.deviceKeyCode = deviceKeyCode
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         keyCode = try c.decodeIfPresent(Int64.self, forKey: .keyCode)
         modifiers = CGEventFlags(rawValue: try c.decode(UInt64.self, forKey: .modifiers))
+        deviceKeyCode = try c.decodeIfPresent(Int64.self, forKey: .deviceKeyCode)
     }
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encodeIfPresent(keyCode, forKey: .keyCode)
         try c.encode(modifiers.rawValue, forKey: .modifiers)
+        try c.encodeIfPresent(deviceKeyCode, forKey: .deviceKeyCode)
     }
 
     static let defaultRightOption = Hotkey(
@@ -685,10 +695,13 @@ struct Hotkey: Equatable, Codable {
         if let code = keyCode {
             parts.append(KeyCodes.name(for: code))
         } else if isBareModifier {
-            // Bare modifier hotkey: clarify that it's the right-side key
-            // (which is the whole point of bare-modifier mode - the left
-            // ones get used as actual modifiers in everyday typing).
-            return "Right \(parts.joined())"
+            // The fn/globe key has no ⌘⌥⇧⌃ glyph; name it outright.
+            if modifiers.contains(CGEventFlags.maskSecondaryFn) { return "fn" }
+            // Bare modifier hotkey: name the side so the user knows which
+            // physical key fires it. Legacy hotkeys (no deviceKeyCode) assumed
+            // the right-side key, so nil falls back to "Right".
+            let side = deviceKeyCode.map(KeyCodes.modifierSideLabel) ?? "Right"
+            return "\(side) \(parts.joined())"
         }
         return parts.joined()
     }
@@ -720,6 +733,18 @@ struct FillerWordEntry: Codable, Equatable, Identifiable, Hashable {
 }
 
 enum KeyCodes {
+    // Device keyCode of the fn/globe key (kVK_Function).
+    static let fnKeyCode: Int64 = 63
+
+    // "Left"/"Right" for a bare modifier's device keyCode. Carbon's kVK_*
+    // constants split the sides: left = 55/56/58/59, right = 54/60/61/62.
+    static func modifierSideLabel(for code: Int64) -> String {
+        switch code {
+        case 54, 60, 61, 62: return "Right"  // R command, shift, option, control
+        default: return "Left"  // 55/56/58/59 + anything unexpected
+        }
+    }
+
     static func name(for code: Int64) -> String {
         // Unlisted codes fall through to "Key <n>".
         switch code {

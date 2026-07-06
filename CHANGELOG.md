@@ -7,6 +7,7 @@ All notable changes to Barktor are documented here. The format follows [Keep a C
 Work in progress toward 0.4.0. Not yet released.
 
 ### Fixed
+- **Set the fn (globe) key or a left-side modifier as your dictation key.** Recording a custom hotkey silently ignored the fn key and always bound modifiers to the *right* side — so on a laptop (no right Control) picking Control produced a key that never fired, and fn did nothing at all. You can now bind fn, and a bare modifier binds the exact physical key you press (Left Control, Right Option, …), named accordingly in the field. Pressing a multi-modifier chord with no key — which still can't be watched — now shows a short hint instead of appearing to do nothing.
 - The first transcription after switching to a Whisper engine could hang for many minutes. Loading a Whisper model runs a one-time Apple Neural Engine compile; a missing guard let the background warm-up and the first dictation compile the same model at once, thrashing the Neural Engine. Warm-ups are now coalesced so the model compiles exactly once.
 
 ### Added

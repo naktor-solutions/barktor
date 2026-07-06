@@ -243,6 +243,10 @@ final class HotkeyManager {
     }
 
     private func bareModifierTargetKeyCode(_ hotkey: Hotkey) -> Int64 {
+        // The recorder captures the exact physical key (left/right side, or fn),
+        // so prefer it. nil means a pre-side-aware stored hotkey, which assumed
+        // the right-side key - keep that behavior.
+        if let code = hotkey.deviceKeyCode { return code }
         let mods = hotkey.modifiers
         if mods.contains(CGEventFlags.maskAlternate) { return Self.kRightOption }
         if mods.contains(CGEventFlags.maskCommand) { return Self.kRightCommand }
@@ -253,6 +257,10 @@ final class HotkeyManager {
 
     private func bareModifierBit(_ hotkey: Hotkey) -> CGEventFlags {
         let mods = hotkey.modifiers
+        // fn is gated on its device keyCode in handleBareModifier, so the
+        // secondary-fn flag here is unambiguous (arrow/function keys can't reach
+        // this path).
+        if mods.contains(CGEventFlags.maskSecondaryFn) { return CGEventFlags.maskSecondaryFn }
         if mods.contains(CGEventFlags.maskAlternate) { return CGEventFlags.maskAlternate }
         if mods.contains(CGEventFlags.maskCommand) { return CGEventFlags.maskCommand }
         if mods.contains(CGEventFlags.maskShift) { return CGEventFlags.maskShift }
