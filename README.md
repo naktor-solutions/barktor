@@ -208,7 +208,7 @@ macOS can't run cleanup code when an app is dragged to the Trash, so those are t
 
 ## License
 
-Barktor is MIT-licensed, as is the Purr codebase it descends from. Copyright (c) 2026 Arun Brahma. See [LICENSE](LICENSE).
+Barktor is MIT-licensed, as is the Purr codebase it descends from. Copyright (c) 2026 Arun Brahma, Copyright (c) 2026 Naktor Solutions. See [LICENSE](LICENSE).
 
 ### Third-party licenses
 
