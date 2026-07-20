@@ -6,6 +6,9 @@ All notable changes to Barktor are documented here. The format follows [Keep a C
 
 ### Fixed
 - The first transcription after switching to a Whisper engine could hang for many minutes. Loading a Whisper model runs a one-time Apple Neural Engine compile; a missing guard let the background warm-up and the first dictation compile the same model at once, thrashing the Neural Engine. Warm-ups are now coalesced so the model compiles exactly once.
+- Parakeet transcription could hang indefinitely on some Macs, pinning the status pill on "Transcribing" with no way to recover. A watchdog now bounds the CoreML inference (generous and audio-proportional, so it only trips on a genuine hang) and aborts a stuck decode into a recoverable error.
+- The menu-bar icon could end up orphaned (never drawn) on macOS Tahoe. The app now registers a proper main menu so the status item always appears, and remembers its position in the bar.
+- Updating from a 0.2.x Purr install now migrates your old settings, history and models even when an empty Barktor scaffold already exists.
 
 ### Added
 - **Copy a dictation with one click.** Click anywhere on a history row to copy its text — a "Copied" check confirms it, no aiming for the small copy button.
@@ -20,6 +23,7 @@ All notable changes to Barktor are documented here. The format follows [Keep a C
 ### Changed
 - **Dictation trigger reworked: pick the gesture and record any key.** The fixed "Hold to talk / Tap to toggle" mode is replaced by one trigger where you choose the gesture — **Hold** (hold to talk; double-tap to lock hands-free, press once to stop), **Tap to toggle**, or **Double-tap to toggle** — and set the key by clicking the field and pressing any key or combination (bare Right Option, ⌃⌥Space, F5, …) instead of picking from a short preset list. Your existing hotkey and mode carry over automatically.
 - **Settings › Engine, reworked.** Smart Typing moved here from General and now lives with the engine that provides it, shown only for engines that can stream — so it's no longer offered where it can't run. The engine picker was redesigned: each option shows its language coverage, a Smart Typing badge, and at-a-glance accuracy and speed, so it's clear which one to pick. On the Multilingual engine, Smart Typing no longer needs the separate Parakeet EOU download.
+- The menu-bar glyph is now a dog-only silhouette, legible at the 18 pt status-item size.
 
 ## [0.3.0] - 2026-07-03
 
@@ -27,6 +31,13 @@ All notable changes to Barktor are documented here. The format follows [Keep a C
 - **Purr is now Barktor.** New app name, bundle identifier (`com.naktor.barktor`), repository (`naktor-solutions/barktor`), and release asset names (`Barktor.dmg`). Because the bundle identifier changed, macOS asks you to re-grant the three permissions once after updating.
 - Default meetings folder is now `~/Library/Application Support/Barktor/Meetings`.
 - The DMG install window was redrawn for Barktor and is now sharp on Retina displays.
+
+### Fixed
+- The menu bar icon could fail to appear at all on macOS Tahoe (the app had
+  no main menu, which can orphan the status item). Ported from upstream Purr.
+- A hung transcription (CoreML never returning) no longer pins the HUD on
+  "Transcribing" forever; it now stops with a clear error after a generous,
+  audio-proportional timeout. Ported from upstream Purr.
 
 ### Added
 - New Barktor app icon and menu-bar glyph.

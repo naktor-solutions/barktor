@@ -29,12 +29,21 @@ enum LegacyMigration {
     // Moves ~/Library/Application Support/Purr -> Barktor wholesale. Same
     // volume, so it's a rename - models measured in GB are never copied -
     // then folds the legacy "Purr Meetings" folder name into "Meetings".
-    // A pre-existing Barktor folder means migration (or a fresh install)
-    // already happened, so the legacy folder is left untouched.
+    // A Barktor folder with real files means migration (or a fresh install)
+    // already happened, so the legacy folder is left untouched. A Barktor
+    // folder holding no files at all is a scaffold from a launch that got
+    // ahead of migration (seen in the wild: an empty models/ dir stranded a
+    // 3.4 GB Purr folder forever) - clear it and migrate anyway.
     static func migrateSupportDirectory(at support: URL, fm: FileManager) {
         let old = support.appendingPathComponent("Purr", isDirectory: true)
         let new = support.appendingPathComponent("Barktor", isDirectory: true)
-        guard fm.fileExists(atPath: old.path), !fm.fileExists(atPath: new.path) else { return }
+        guard fm.fileExists(atPath: old.path) else { return }
+        if fm.fileExists(atPath: new.path) {
+            guard containsNoFiles(new, fm: fm), (try? fm.removeItem(at: new)) != nil else {
+                log.info("skipping support-dir migration: Barktor folder already has data")
+                return
+            }
+        }
         do {
             try fm.moveItem(at: old, to: new)
             let oldMeetings = new.appendingPathComponent("Purr Meetings", isDirectory: true)
@@ -48,6 +57,22 @@ enum LegacyMigration {
             // creating fresh directories, so the app still launches.
             log.error("support-dir migration failed: \(error.localizedDescription)")
         }
+    }
+
+    // True when the tree contains no regular files - at most (nested) empty
+    // directories. Symlinks and anything unreadable count as data.
+    static func containsNoFiles(_ url: URL, fm: FileManager) -> Bool {
+        guard
+            let contents = fm.enumerator(
+                at: url, includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.producesRelativePathURLs])
+        else { return false }
+        for case let item as URL in contents {
+            let isDirectory =
+                (try? item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            if !isDirectory { return false }
+        }
+        return true
     }
 
     // MARK: - UserDefaults

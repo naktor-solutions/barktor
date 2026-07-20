@@ -90,6 +90,30 @@ struct LegacyMigrationTests {
         #expect(newKept)
     }
 
+    @Test func replacesABarktorScaffoldThatHoldsNoFiles() throws {
+        let fm = FileManager.default
+        let support = try makeTempSupport()
+        defer { try? fm.removeItem(at: support) }
+        let old = support.appendingPathComponent("Purr", isDirectory: true)
+        let new = support.appendingPathComponent("Barktor", isDirectory: true)
+        try fm.createDirectory(
+            at: old.appendingPathComponent("models"), withIntermediateDirectories: true)
+        try Data("weights".utf8).write(
+            to: old.appendingPathComponent("models/weights.bin"))
+        // Empty scaffold (directories only, no files), as left behind by a
+        // launch that created Barktor/models before migration got to run.
+        try fm.createDirectory(
+            at: new.appendingPathComponent("models"), withIntermediateDirectories: true)
+
+        LegacyMigration.migrateSupportDirectory(at: support, fm: fm)
+
+        let oldGone = !fm.fileExists(atPath: old.path)
+        let weightsMoved = fm.fileExists(
+            atPath: new.appendingPathComponent("models/weights.bin").path)
+        #expect(oldGone)
+        #expect(weightsMoved)
+    }
+
     @Test func noopWhenThereIsNothingToMigrate() throws {
         let fm = FileManager.default
         let support = try makeTempSupport()
